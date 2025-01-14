@@ -526,7 +526,7 @@ void invokeFinalize(BeamHypotheses& bh, cudaStream_t stream)
     TLLM_LOG_TRACE("%s %s start", __FILE__, __PRETTY_FUNCTION__);
 
     int const nBM = bh.nBeamWidth;
-    int const nThread = min(roundUp(nBM * 2, 32), 1024);
+    int const nThread = std::min(roundUp(nBM * 2, 32), 1024);
     size_t const nByteSharedMemory = (sizeof(int) + sizeof(float)) * nBM * 2;
     finalizeKernel<<<bh.nBatchSize, nThread, nByteSharedMemory, stream>>>(bh);
     sync_check_cuda_error();
@@ -676,7 +676,7 @@ void invokeCopyNextStepIds(TokenIdType* nextStepIds, TokenIdType const* const* o
     SizeType32 maxTokensPerStep, cudaStream_t stream)
 {
     int const numElems = batchSize * beamWidth * maxTokensPerStep;
-    dim3 block(min(256, numElems));
+    dim3 block(std::min(256, numElems));
     dim3 grid(divUp(numElems, block.x));
     copyNextStepIds<<<grid, block, 0, stream>>>(nextStepIds, outputIdsPtr, sequenceLengths, numNewTokens, batchSlots,
         batchSize, maxBatchSize, beamWidth, maxSeqLen, maxTokensPerStep);

@@ -439,7 +439,7 @@ public:
             if constexpr (use_dq_gemm<Mma>::value)
             {
                 const MatrixCoord scale_extent = {1, problem_size.n()};
-                typename Mma::IteratorScale iterator_scale(Mma::IteratorScale::Layout(scale_extent.column()),
+                typename Mma::IteratorScale iterator_scale(typename Mma::IteratorScale::Layout(scale_extent.column()),
                     weight_scale_ptr, scale_extent, thread_idx, tb_offset_scale);
 
                 mma(gemm_k_iterations, accumulators, iterator_A, iterator_B, iterator_scale, accumulators);

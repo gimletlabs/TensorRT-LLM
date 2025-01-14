@@ -611,7 +611,7 @@ void beamSearchKernelLauncher(
         invokeTopkLastDim<T>(nBS * nBM, nV, nBM * 2, true, logProbs, pStage1LogProbs, pStage1Ids, pTopK, stream);
         sync_check_cuda_error();
 
-        int nThread = min(roundUp(nBM * nBM * 2, 32), 1024);
+        int nThread = std::min(roundUp(nBM * nBM * 2, 32), 1024);
         addCumLogProbs<<<nBS, nThread, 0, stream>>>(
             pStage1LogProbs, bh.cumLogProbs, bh.finished, bh.endIds, bh.diversityRates, bh.batchSlots, nBS, nBM);
         sync_check_cuda_error();
@@ -621,7 +621,7 @@ void beamSearchKernelLauncher(
             nBS, nBM * nBM * 2, nBM * 2, true, pStage1LogProbs, pStage2LogProbs, pStage2Ids, pTopK, stream);
         sync_check_cuda_error();
 
-        nThread = min(roundUp(nBM * 2, 32), 1024);
+        nThread = std::min(roundUp(nBM * 2, 32), 1024);
         gatherId<<<nBS, nThread, 0, stream>>>(pStage1Ids, pStage2Ids, nBS, nBM, nV);
         sync_check_cuda_error();
     }

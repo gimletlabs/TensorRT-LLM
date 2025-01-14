@@ -21,6 +21,7 @@
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
 #endif // __GNUC__
 
+#include <cuda_fp16.h>
 #include "cute/tensor.hpp"
 #include "cutlass/conv/convolution.h"
 // Order matters here, packed_stride.hpp is missing cute and convolution includes

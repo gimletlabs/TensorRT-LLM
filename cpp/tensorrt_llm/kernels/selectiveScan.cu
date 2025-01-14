@@ -92,7 +92,15 @@ __launch_bounds__(256, 1) __global__ void selective_scan_loop_kernel(SSMParamsBa
     bool dt_softplus = params.delta_softplus;
     int num_channels = params.dim;
 
+
+//#ifdef __clang__
+//#pragma clang diagnostic push
+//#pragma clang diagnostic ignored "-Wcuda-shared-var-with-dynamic-init"
+//#endif
     __shared__ cuda::pipeline_shared_state<cuda::thread_scope::thread_scope_block, STAGES / SEQ_UNROLL> pipeline_state;
+//#ifdef __clang__
+//#pragma clang diagnostic pop
+//#endif
     auto block = cooperative_groups::this_thread_block();
 
     __shared__ __align__(16) input_t sh_B[STAGES][DSTATE];

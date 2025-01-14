@@ -1239,7 +1239,7 @@ void standalone_stable_radix_topk_(void* buf, size_t& buf_size, T const* in, Idx
                 out_idx, k * batch_size, batch_size, transform_iter, transform_iter + 1, stream);
         }
     }
-    temp_storage_bytes = max(temp_storage_bytes, temp_storage_bytes_sort);
+    temp_storage_bytes = std::max(temp_storage_bytes, temp_storage_bytes_sort);
 
     {
         IdxT len_candidates = air_topk_stable::calc_buf_len<T>(len);
@@ -1368,7 +1368,7 @@ void standalone_stable_radix_topk_one_block_(void* buf, size_t& buf_size, T cons
         }
     }
 
-    temp_storage_bytes = max(temp_storage_bytes, temp_storage_bytes_sort);
+    temp_storage_bytes = std::max(temp_storage_bytes, temp_storage_bytes_sort);
     {
         size_t total_size = 0;
         size_t sort_buffer_size = 0;

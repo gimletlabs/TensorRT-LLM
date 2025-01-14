@@ -17,6 +17,7 @@
 #include "tensorrt_llm/runtime/utils/speculativeChoicesUtils.h"
 #include <stack>
 #include <vector>
+#include <cstring>
 
 namespace tensorrt_llm::runtime::utils
 {

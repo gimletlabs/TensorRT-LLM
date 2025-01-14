@@ -241,7 +241,7 @@ void BeamSearchLayer<T>::configureBeamSearchLayer()
         size_t const nByteStage2TopK = invokeComputeTopkLastDimWorkspaceSize<T>(nBS, nPBM * nPBM * 2, nBM * 2, true);
         size_t const nByteStage3 = sizeof(T) * nBM * nBM * 2;
         this->mWorkspaceSize = nByteStage2LogProbs + nByteStage2Ids
-            + max(nByteStage1LogProbs + nByteStage1Ids + max(nByteStage1TopK, nByteStage2TopK), nByteStage3);
+            + std::max(nByteStage1LogProbs + nByteStage1Ids + std::max(nByteStage1TopK, nByteStage2TopK), nByteStage3);
     }
 
     TLLM_LOG_TRACE("%s stop", __PRETTY_FUNCTION__);

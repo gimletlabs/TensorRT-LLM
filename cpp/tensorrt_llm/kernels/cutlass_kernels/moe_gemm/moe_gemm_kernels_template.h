@@ -587,7 +587,7 @@ MoeGemmRunner<T, WeightType, OutputType, ScaleBiasType>::MoeGemmRunner()
 
 template <typename T, typename WeightType, typename OutputType, typename ScaleBiasType>
 template <typename EpilogueTag>
-void MoeGemmRunner<T, WeightType, OutputType, ScaleBiasType>::dispatchToArch<EpilogueTag>(T const* A,
+void MoeGemmRunner<T, WeightType, OutputType, ScaleBiasType>::dispatchToArch(T const* A,
     WeightType const* B, ScaleBiasType const* weight_scales, ScaleBiasType const* biases, bool bias_is_broadcast,
     void* C_void, int64_t const* total_tokens_including_expert, HopperGroupedGemmInput hopper_input, int64_t total_rows,
     int64_t gemm_n, int64_t gemm_k, int num_experts, cutlass_extensions::CutlassGemmConfig gemm_config,

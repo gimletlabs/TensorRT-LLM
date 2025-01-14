@@ -401,7 +401,7 @@ struct Fused_Moe_Kernel_routine_sm80<ElementInput_, ElementWeight_, ElementOutpu
 
         // (4) push all the result to smem
         // (4.1) convert result from ElementAccum to ElementInput
-        cute::Tensor temp_accum = util_convert_type<KT::ElementOutput>(accum);
+        cute::Tensor temp_accum = util_convert_type<typename KT::ElementOutput>(accum);
         // if (cute::thread0()) {
         //     cute::print(temp_accum(0, 0, 0));
         //     printf("\n");
@@ -431,7 +431,7 @@ struct Fused_Moe_Kernel_routine_sm80<ElementInput_, ElementWeight_, ElementOutpu
         cute::Tensor cOutput = cute::make_identity_tensor(
             cute::make_shape(cute::size<0>(typename KT::TileShape{}), cute::size<1>(typename KT::TileShape{})));
         cute::Tensor tOcO = gmem_thr_copy_O.partition_D(cOutput);
-        cute::Tensor tOrO = cute::make_tensor<KT::ElementOutput>(cute::shape(tOgO));
+        cute::Tensor tOrO = cute::make_tensor<typename KT::ElementOutput>(cute::shape(tOgO));
         cute::copy(gmem_tiled_copy_O, tOsO, tOrO);
 
         CUTLASS_PRAGMA_UNROLL

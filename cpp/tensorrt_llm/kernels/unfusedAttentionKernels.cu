@@ -132,7 +132,7 @@ void invokeAddQKVBiasIA3Transpose(T* q_buf, T* k_buf, T* v_buf, T* Q, T const* b
     bool is_add_bias = bias_Q != nullptr;
     if (sizeof(T) == 4 || k % 2 != 0)
     {
-        dim3 block(min(k, 512));
+        dim3 block(std::min(k, 512));
         if (is_add_bias)
         {
             addQKVBiasIA3Transpose<T><<<grid, block, 0, stream>>>(q_buf, k_buf, v_buf, Q, bias_Q, K, bias_K, V, bias_V,
@@ -148,7 +148,7 @@ void invokeAddQKVBiasIA3Transpose(T* q_buf, T* k_buf, T* v_buf, T* Q, T const* b
     else
     {
         using T2 = typename TypeConverter<T>::Type; // fp16 to half2, bf16 to bf162
-        dim3 block(min(k / 2, 512));
+        dim3 block(std::min(k / 2, 512));
         if (is_add_bias)
         {
             addQKVBiasIA3Transpose<T2><<<grid, block, 0, stream>>>((T2*) q_buf, (T2*) k_buf, (T2*) v_buf, (const T2*) Q,
@@ -1699,7 +1699,7 @@ __global__ void transpose4dBatchMajorKVCache(T const* kSrc, T const* vSrc, KVCac
         // If T is fp16/bf16, T_src is uint4 and mmha::num_elems<T_src>::value returns 8
         // mmha::packed_type<int8_t ...>::type becomes uint32_t or uint64_t respectively
         // FIXME mmha::num_elems semantic is confusing
-        inBlockIdx = inBlockIdx * sizeof(mmha::packed_type<T_dst, mmha::num_elems<T_src>::value>::type);
+        inBlockIdx = inBlockIdx * sizeof(typename mmha::packed_type<T_dst, mmha::num_elems<T_src>::value>::type);
         // Cast float scale to dst data type.
         using T_scale = typename mmha::kv_cache_scale_type_t<T, T_cache>::Type;
         T_scale scaleOrigQuant;
@@ -2388,7 +2388,7 @@ void invokeCpTranspose2(T* dst, T const* src, int32_t const* q_seq_lengths, int3
     int32_t const* cu_cp_partial_seqlens, int64_t cpSize, int64_t maxPartalLength, int64_t batchSize,
     int64_t partialHeads, int64_t headSize, cudaStream_t stream)
 {
-    int64_t clipedMaxPartialLength = min(static_cast<int>(maxPartalLength), 512);
+    int64_t clipedMaxPartialLength = std::min(static_cast<int>(maxPartalLength), 512);
     dim3 grid(cpSize, clipedMaxPartialLength, batchSize);
     dim3 block(128);
     runCpTranspose2<T><<<grid, block, 0, stream>>>(dst, src, q_seq_lengths, cu_q_seqlens, cu_cp_partial_seqlens, cpSize,
@@ -2409,7 +2409,7 @@ void invokeCpTransposeToSeqMajor2(T* dst, T const* src, int32_t const* q_seq_len
     int32_t const* cu_cp_partial_seqlens, int64_t cpSize, int64_t maxPartalLength, int64_t batchSize,
     int64_t partialHeads, int64_t headSize, cudaStream_t stream)
 {
-    int64_t clipedMaxPartialLength = min(static_cast<int>(maxPartalLength), 512);
+    int64_t clipedMaxPartialLength = std::min(static_cast<int>(maxPartalLength), 512);
     dim3 grid(cpSize, clipedMaxPartialLength, batchSize);
     dim3 block(128);
     runCpTransposeToSeqMajor2<T><<<grid, block, 0, stream>>>(dst, src, q_seq_lengths, cu_q_seqlens,

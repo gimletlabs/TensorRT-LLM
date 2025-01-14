@@ -39,12 +39,12 @@ public:
         TLLM_CHECK_DEBUG(value >= 0);
     }
 
-    __host__ __device__ [[nodiscard]] UnderlyingType get() const
+    [[nodiscard]] __host__ __device__ UnderlyingType get() const
     {
         return value & (~kSecondaryPoolFlag);
     }
 
-    __host__ __device__ [[nodiscard]] bool isPrimary() const
+    [[nodiscard]] __host__ __device__ bool isPrimary() const
     {
         return (value & kSecondaryPoolFlag) == 0;
     }

@@ -83,7 +83,14 @@ __launch_bounds__(256, 1) __global__ void rg_lru_kernel(lruParams params)
         }
     }
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcuda-static-var-with-dynamic-init"
+#endif
     __shared__ cuda::pipeline_shared_state<cuda::thread_scope::thread_scope_block, STAGES / SEQ_UNROLL> pipeline_state;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
     auto block = cooperative_groups::this_thread_block();
 
     __shared__ __align__(128) T sh_gx[STAGES][CHANNELS_PER_BLOCK];

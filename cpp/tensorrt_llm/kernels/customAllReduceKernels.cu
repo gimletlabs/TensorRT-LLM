@@ -626,7 +626,7 @@ struct Reducer<T, RanksPerNode, false>
 template <int ClusterSize, typename T, int RanksPerNode, bool Bias = false, bool Affine = false, bool PushMode = true>
 static __global__ void lamport_style_one_shot_all_reduce_norm_kernel(AllReduceParams params)
 {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if defined(_CG_HAS_CLUSTER_GROUP)
     namespace cg = cooperative_groups;
     static_assert(RanksPerNode <= 8);
     static constexpr int kPackedSize = details::kBytesPerAccess / sizeof(T);

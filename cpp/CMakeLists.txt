@@ -172,33 +172,7 @@ configure_file(
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
   message(STATUS "CUDA compiler: ${CMAKE_CUDA_COMPILER}")
-  if(NOT WIN32) # Linux
-    execute_process(
-      COMMAND
-        "bash" "-c"
-        "${CMAKE_CUDA_COMPILER} --version | egrep -o 'V[0-9]+.[0-9]+.[0-9]+' | cut -c2-"
-      RESULT_VARIABLE _BASH_SUCCESS
-      OUTPUT_VARIABLE CMAKE_CUDA_COMPILER_VERSION
-                      OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-    if(NOT _BASH_SUCCESS EQUAL 0)
-      message(FATAL_ERROR "Failed to determine CUDA version")
-    endif()
-
-  else() # Windows
-    execute_process(
-      COMMAND ${CMAKE_CUDA_COMPILER} --version
-      OUTPUT_VARIABLE versionString
-      RESULT_VARIABLE versionResult)
-
-    if(versionResult EQUAL 0 AND versionString MATCHES
-                                 "V[0-9]+\\.[0-9]+\\.[0-9]+")
-      string(REGEX REPLACE "V" "" version ${CMAKE_MATCH_0})
-      set(CMAKE_CUDA_COMPILER_VERSION "${version}")
-    else()
-      message(FATAL_ERROR "Failed to determine CUDA version")
-    endif()
-  endif()
+  set(CMAKE_CUDA_COMPILER_VERSION "12.6")
 else()
   message(FATAL_ERROR "No CUDA compiler found")
 endif()
@@ -316,7 +290,7 @@ endif()
 get_filename_component(TRT_LLM_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR} PATH)
 
 set(3RDPARTY_DIR ${TRT_LLM_ROOT_DIR}/3rdparty)
-add_subdirectory(${3RDPARTY_DIR}/pybind11 ${CMAKE_CURRENT_BINARY_DIR}/pybind11)
+#add_subdirectory(${3RDPARTY_DIR}/pybind11 ${CMAKE_CURRENT_BINARY_DIR}/pybind11)
 
 include_directories(
   ${CUDAToolkit_INCLUDE_DIRS}
@@ -325,8 +299,8 @@ include_directories(
   ${3RDPARTY_DIR}/cutlass/include
   ${3RDPARTY_DIR}/cutlass/tools/util/include
   ${3RDPARTY_DIR}/NVTX/include
-  ${3RDPARTY_DIR}/json/include
-  ${3RDPARTY_DIR}/pybind11/include)
+  ${3RDPARTY_DIR}/json/include)
+  #${3RDPARTY_DIR}/pybind11/include)
 
 # TRT dependencies
 set_ifndef(TRT_LIB_DIR ${CMAKE_BINARY_DIR})
