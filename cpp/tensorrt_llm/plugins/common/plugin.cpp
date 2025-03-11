@@ -16,6 +16,7 @@
  */
 #include "tensorrt_llm/plugins/common/plugin.h"
 
+#include "tensorrt_llm/common/logger.h"
 #include "tensorrt_llm/common/mpiUtils.h"
 
 #include "checkMacrosPlugin.h"
@@ -376,11 +377,12 @@ std::optional<T> PluginFieldParser::getScalar(std::string_view const& name)
     auto const iter = mMap.find(name);
     if (iter == mMap.end())
     {
+        TLLM_LOG_ERROR("could not find plugin field: " + std::string(name));
         return std::nullopt;
     }
     auto& record = mMap.at(name);
     auto const& f = mFields[record.index];
-    TLLM_CHECK(toFieldType<T>() == f.type && f.length == 1);
+    TLLM_CHECK_WITH_INFO(toFieldType<T>() == f.type && f.length == 1, "Field %s not correct type. expected %d received %d", name.data(), toFieldType<T>(), f.type);
     record.retrieved = true;
     return std::optional{*static_cast<T const*>(f.data)};
 }
