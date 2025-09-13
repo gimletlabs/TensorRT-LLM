@@ -71,7 +71,7 @@ int calc_smem_size_for_block_wide(int num_of_warp, int64_t k)
 {
     int64_t cache_topk = (sizeof(T) + sizeof(idxT)) * num_of_warp * k;
     int64_t n = std::max<int>(num_of_warp / 2 * k, num_of_warp * WARP_SIZE);
-    return max(cache_topk, round_up_to_multiple_of<256>(n * sizeof(T)) + n * sizeof(idxT));
+    return std::max(cache_topk, static_cast<int64_t>(round_up_to_multiple_of<256>(n * sizeof(T)) + n * sizeof(idxT)));
 }
 
 template <int size, bool ascending, bool reverse, typename T, typename idxT, bool is_stable>

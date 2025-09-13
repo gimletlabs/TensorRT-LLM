@@ -253,12 +253,12 @@ struct LowLatencyLayerNorm
         if constexpr (!Traits::RMS_NORM)
         {
             mean = var_and_mean[1] / param.n;
-            variance = rsqrtf(
-                var_and_mean[0] / param.n - var_and_mean[1] * var_and_mean[1] + (Traits::AccumulatorType)(1e-5));
+            variance = rsqrtf(var_and_mean[0] / param.n - var_and_mean[1] * var_and_mean[1]
+                + (typename Traits::AccumulatorType)(1e-5));
         }
         else
         {
-            variance = rsqrtf(var_and_mean[0] / param.n + (Traits::AccumulatorType)(1e-5));
+            variance = rsqrtf(var_and_mean[0] / param.n + (typename Traits::AccumulatorType)(1e-5));
         }
 
         for (int i = 0; i < PACKED_PER_N_BLOCK; i++)

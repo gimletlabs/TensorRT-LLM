@@ -791,7 +791,7 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
         input_t const* g_mxXa_, input_t const* g_mxXs_, input_t const* g_mxW_, input_t const* g_mxB_,
         bool removePadding_, bool applySilu_, int const* lastTokenIdsPtr_, int const* stateSlotMappingPtr_);
 
-    if (std::is_same_v<input_t, float>)
+    if constexpr (std::is_same_v<input_t, float>)
     {
         if (tensorrt_llm::common::getSMVersion() >= 90 && tensorrt_llm::common::getSMVersion() < 120)
         {
@@ -802,9 +802,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 524288 || D % 64 == 32)
             {
@@ -813,9 +813,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 1048576)
             {
@@ -824,9 +824,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 4;
                 pipe = 4;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false, input_t>;
             }
             else if (B * L * D <= 4194304)
             {
@@ -837,9 +837,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 4;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false, input_t>;
                 }
                 else
                 {
@@ -848,9 +848,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 8;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, false, input_t>;
                 }
             }
             else
@@ -860,9 +860,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 2;
                 pipe = 4;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false, input_t>;
             }
         }
         else if (tensorrt_llm::common::getSMVersion() >= 80)
@@ -874,9 +874,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 524288 || D % 64 == 32)
             {
@@ -885,9 +885,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 1048576)
             {
@@ -896,9 +896,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 4;
                 pipe = 4;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false, input_t>;
             }
             else if (B * L * D <= 4194304)
             {
@@ -909,9 +909,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 4;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 4, false, input_t>;
                 }
                 else
                 {
@@ -920,9 +920,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 8;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 4, false, input_t>;
                 }
             }
             else
@@ -934,9 +934,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 2;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false, input_t>;
                 }
                 else
                 {
@@ -945,9 +945,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 4;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, false, input_t>;
                 }
             }
         }
@@ -960,9 +960,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 524288 || D % 64 == 32)
             {
@@ -971,9 +971,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 1048576)
             {
@@ -984,9 +984,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 4;
                     pipe = 2;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, true>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, false>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, false, input_t>;
                 }
                 else
                 {
@@ -995,9 +995,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 8;
                     pipe = 2;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 2, true>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 2, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 2, false>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 8, 2, false, input_t>;
                 }
             }
             else
@@ -1007,9 +1007,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false, input_t>;
             }
         }
         else
@@ -1021,9 +1021,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 8, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 524288 || D % 64 == 32)
             {
@@ -1032,9 +1032,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 2;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 2, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 2, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 2, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 2, 2, false, input_t>;
             }
             else if (B * L * D <= 1048576)
             {
@@ -1043,9 +1043,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 4;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 4, 2, false, input_t>;
             }
             else
             {
@@ -1054,9 +1054,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 1, 2, false, input_t>;
             }
         }
     }
@@ -1071,9 +1071,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 4;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 4, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 4, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 4, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 4, false, input_t>;
             }
             else if (B * L * D <= 1048576)
             {
@@ -1082,9 +1082,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 2;
                 pipe = 4;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false, input_t>;
             }
             else
             {
@@ -1095,9 +1095,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 2;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 4, false, input_t>;
                 }
                 else
                 {
@@ -1106,9 +1106,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 4;
                     pipe = 4;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, true>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, false>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 4, false, input_t>;
                 }
             }
         }
@@ -1121,9 +1121,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 1;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 32, 1, 4, 1, 2, false, input_t>;
             }
             else if (B * L * D <= 1048576)
             {
@@ -1132,9 +1132,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                 laneD = 2;
                 pipe = 2;
                 if (aligned)
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, true>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, true, input_t>;
                 else
-                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, false>;
+                    f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, false, input_t>;
             }
             else
             {
@@ -1145,9 +1145,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 2;
                     pipe = 2;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, true>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, false>;
+                        f = mambaConv1dContextKernel<4, 32, 64, 1, 4, 2, 2, false, input_t>;
                 }
                 else
                 {
@@ -1156,9 +1156,9 @@ void invokeMambaConv1dContext(MambaConv1dParamsBase& params, cudaStream_t stream
                     laneD = 4;
                     pipe = 2;
                     if (aligned)
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 2, true>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 2, true, input_t>;
                     else
-                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 2, false>;
+                        f = mambaConv1dContextKernel<4, 32, 128, 1, 4, 4, 2, false, input_t>;
                 }
             }
         }

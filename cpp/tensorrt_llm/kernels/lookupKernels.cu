@@ -70,8 +70,8 @@ void invokeLookUp(Tout* out, Idx const* input, Tin const* weight, int64_t const 
 {
     int64_t constexpr max_block_num = 65536;
     Idx constexpr max_block_size = 512;
-    dim3 grid(min(token_num, max_block_num));
-    dim3 block(min(n_embed, max_block_size));
+    dim3 grid(std::min(token_num, max_block_num));
+    dim3 block(std::min(n_embed, max_block_size));
     lookup_kernel<Tout, Tin, Idx>
         <<<grid, block, 0, stream>>>(out, input, weight, token_num, offset, size, n_embed, perTokenScales);
 }

@@ -356,8 +356,8 @@ __launch_bounds__(BLOCK_SIZE) __global__ void beamStage3Kernel(
                                 bh.normedScoresCBA[slot * (nBM * 2) + j] = score;
                                 for (int l = 0; l < nBM; l++)
                                 {
-                                    bh.minNormedScoresCBA[slot]
-                                        = min(bh.minNormedScoresCBA[slot], bh.normedScoresCBA[slot * (nBM * 2) + l]);
+                                    bh.minNormedScoresCBA[slot] = std::min(
+                                        bh.minNormedScoresCBA[slot], bh.normedScoresCBA[slot * (nBM * 2) + l]);
                                 }
                                 break;
                             }
@@ -394,7 +394,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void beamStage3Kernel(
                 int const index = slot * (nBM * 2) + nCBA;
                 bh.sequenceLengthsCBA[index] = step;
                 bh.normedScoresCBA[index] = score;
-                bh.minNormedScoresCBA[slot] = min(bh.minNormedScoresCBA[slot], bh.normedScoresCBA[index]);
+                bh.minNormedScoresCBA[slot] = std::min(bh.minNormedScoresCBA[slot], bh.normedScoresCBA[index]);
                 bh.numBeamsCBA[slot]++;
                 bh.cumLogProbsCBA[index] = (float) topLogProb;
             }
@@ -627,7 +627,7 @@ void beamSearchKernelLauncher(
         invokeTopkLastDim<T>(nBS * nBMIn, nV, nBMOut * 2, true, logProbs, pStage1LogProbs, pStage1Ids, pTopK, stream);
         sync_check_cuda_error(stream);
 
-        int nThread = min(roundUp(nBMIn * nBMOut * 2, 32), 1024);
+        int nThread = std::min(roundUp(nBMIn * nBMOut * 2, 32), 1024);
         addCumLogProbs<<<nBS, nThread, 0, stream>>>(pStage1LogProbs, bh.cumLogProbs, bh.finished, bh.endIds,
             bh.diversityRates, bh.batchSlots, nBS, nBMIn, nBMOut, nBM);
         sync_check_cuda_error(stream);
@@ -637,7 +637,7 @@ void beamSearchKernelLauncher(
             nBS, nBMIn * nBMOut * 2, nBMOut * 2, true, pStage1LogProbs, pStage2LogProbs, pStage2Ids, pTopK, stream);
         sync_check_cuda_error(stream);
 
-        nThread = min(roundUp(nBMOut * 2, 32), 1024);
+        nThread = std::min(roundUp(nBMOut * 2, 32), 1024);
         gatherId<<<nBS, nThread, 0, stream>>>(pStage1Ids, pStage2Ids, nBS, nBMIn, nBMOut, nV);
         sync_check_cuda_error(stream);
     }

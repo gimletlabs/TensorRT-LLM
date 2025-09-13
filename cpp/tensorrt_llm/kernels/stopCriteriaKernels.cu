@@ -121,7 +121,7 @@ void invokeStopWordsCriterion(TokenIdType const** outputIds, SizeType32 const** 
     dim3 block, grid;
     constexpr SizeType32 maxBlockSize{256};
 
-    block.x = min(((maxStopWordsLen + 32 - 1) / 32) * 32, maxBlockSize);
+    block.x = std::min(((maxStopWordsLen + 32 - 1) / 32) * 32, maxBlockSize);
     grid.x = (maxStopWordsLen + block.x - 1) / block.x;
     grid.y = batchSize * beamWidth;
 
@@ -186,7 +186,7 @@ void invokeLengthCriterion(FinishedState* finished, SizeType32* finishedSum, Siz
     // Check if we have attained the sequence length limit. If so, stop the
     // sequence. In addition, check if all sequences are stopped and return the
     // result in shouldStop
-    dim3 block{min(512, static_cast<uint32_t>(beamWidth))};
+    dim3 block{std::min(512U, static_cast<uint32_t>(beamWidth))};
     dim3 grid{static_cast<uint32_t>(batchSize)};
 
     lengthCriterion<<<grid, block, 0, stream>>>(
@@ -214,7 +214,7 @@ __global__ void explicitEOSCriterion(TokenIdType const** outputIds, TokenIdType 
     auto const endId = endIds[batchSlot];
     auto const sequenceLength = sequenceLengths[batchSlot];
 
-    auto const posStart = max(0, sequenceLength - numTokens);
+    auto const posStart = std::max(0, sequenceLength - numTokens);
     auto const posEnd = sequenceLength;
     for (SizeType32 pos = posStart; pos < posEnd; ++pos)
     {
@@ -222,7 +222,7 @@ __global__ void explicitEOSCriterion(TokenIdType const** outputIds, TokenIdType 
         if (token == endId)
         {
             finished[batchSlot].setFinishedEOS();
-            sequenceLengths[batchSlot] = max(0, pos);
+            sequenceLengths[batchSlot] = std::max(0, pos);
             if (numNewTokens)
             {
                 numNewTokens[batchSlot] = pos - posStart;

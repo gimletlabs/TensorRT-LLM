@@ -337,7 +337,7 @@ void invokeMTPSampleAndAcceptDraftTokens(MTPSampleAndAcceptDraftTokensParam& par
     int constexpr BLOCK_SIZE = 512;
     int numLogits
         = params.numContextRequest + (params.batchSize - params.numContextRequest) * (params.numMTPModules + 1);
-    int greedyBlockSize = min(BLOCK_SIZE, params.vocabSize);
+    int greedyBlockSize = std::min(BLOCK_SIZE, params.vocabSize);
 
     mtpGreedySampling<T, BLOCK_SIZE><<<numLogits, greedyBlockSize, 0, stream>>>(params.numMTPModules, params.batchSize,
         params.numContextRequest, params.vocabSize, reinterpret_cast<T*>(params.logits), params.targetTokens);

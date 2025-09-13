@@ -81,7 +81,8 @@ __global__ void ban_repeat_ngram(T* logits, TokenIdType const** output_ids_buf, 
     if (threadIdx.x == 0)
     {
         auto parent_id = beam_idx;
-        auto const start_record_idx = min(output_idx + shared_tokens_length, static_cast<SizeType32>(step));
+        auto const start_record_idx
+            = std::min(static_cast<SizeType32>(output_idx + shared_tokens_length), static_cast<SizeType32>(step));
         auto shared_token_idx = start_record_idx == step ? step - output_idx - 1 : shared_tokens_length - 1;
         auto last_token_idx = last_tokens_length - 1;
         // write to shared mem in reverse order; boundary condition when thread block covers more than step
@@ -150,7 +151,7 @@ void invokeBanRepeatNgram(T* logits, TokenIdType const** output_ids_buf, Finishe
     // step (current generated length, except start token) is from 1 ~ max_seq_len
     dim3 block, grid;
     constexpr SizeType32 max_blocks{256};
-    block.x = min(((max_step + 32 - 1) / 32) * 32, max_blocks);
+    block.x = std::min(((max_step + 32 - 1) / 32) * 32, max_blocks);
     grid.x = (max_step + block.x - 1) / block.x;
     grid.y = batch_size * beam_width;
 

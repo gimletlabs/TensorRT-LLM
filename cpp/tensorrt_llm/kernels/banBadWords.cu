@@ -105,7 +105,7 @@ void invokeBanBadWords(T* logits, TokenIdType const** output_ids_ptr, SizeType32
 {
     dim3 block, grid;
     constexpr SizeType32 max_blocks{256};
-    block.x = min(((max_bad_words_len + 32 - 1) / 32) * 32, max_blocks);
+    block.x = std::min(((max_bad_words_len + 32 - 1) / 32) * 32, max_blocks);
     grid.x = (max_bad_words_len + block.x - 1) / block.x;
     grid.y = batch_size * beam_width;
 

@@ -131,7 +131,7 @@ __device__ __forceinline__ void dequantize(void* w, void* quantized_w, void* sca
 #pragma unroll
     for (int n = 0; n < N; ++n)
     {
-        Converter::convert<K>(reinterpret_cast<uint8_t*>(quantized_w) + n * K / Details::kElemsPerByteW,
+        Converter::template convert<K>(reinterpret_cast<uint8_t*>(quantized_w) + n * K / Details::kElemsPerByteW,
             reinterpret_cast<Type*>(w) + n * K);
         Type2 vec_scale, vec_zero;
         if constexpr (ApplyAlphaInAdvance)

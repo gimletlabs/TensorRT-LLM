@@ -1424,8 +1424,8 @@ __global__ void __launch_bounds__(MAX_THEADS_PER_BLOCK, MIN_BLOCKS_PER_SM) maske
 
     // This could be one of the reasons to have a separate kernel for cross attention
     constexpr auto bias_smem_size = DO_CROSS_ATTENTION ? Dh_MAX : 1u;
-    __shared__ __align__(mmha::const_max(mmha::const_max(sizeof(Qk_vec_k), sizeof(K_vec_k)), sizeof(V_vec_k)))
-        [[maybe_unused]] Tk bias_smem[bias_smem_size];
+    [[maybe_unused]] __shared__ __align__(mmha::const_max(
+        mmha::const_max(sizeof(Qk_vec_k), sizeof(K_vec_k)), sizeof(V_vec_k))) Tk bias_smem[bias_smem_size];
 
     // The number of elements per vector.
     constexpr unsigned QK_VEC_SIZE{sizeof(Qk_vec_m) / sizeof(T)};

@@ -144,12 +144,12 @@ struct KVBlockArray : public KVBlockArrayForContextFMHA
             mMaxSeqs, mMaxBlocksPerSeq, mTokensPerBlock, mBytesPerBlock / mTokensPerBlock, mPrimaryPoolPtr, data};
     }
 
-    __host__ __device__ [[nodiscard]] inline bool isSinkToken(int32_t tokenIdx) const
+    [[nodiscard]] __host__ __device__ inline bool isSinkToken(int32_t tokenIdx) const
     {
         return tokenIdx < mSinkTokens;
     }
 
-    __host__ __device__ [[nodiscard]] inline int32_t getKVTokenIdx(int32_t tokenIdx) const
+    [[nodiscard]] __host__ __device__ inline int32_t getKVTokenIdx(int32_t tokenIdx) const
     {
         if (!isSinkToken(tokenIdx))
         {
@@ -159,7 +159,7 @@ struct KVBlockArray : public KVBlockArrayForContextFMHA
         return tokenIdx;
     }
 
-    __host__ __device__ [[nodiscard]] inline DataType const* getRowPtr(KVIdxType kvIdx, int32_t seqIdx) const
+    [[nodiscard]] __host__ __device__ inline DataType const* getRowPtr(KVIdxType kvIdx, int32_t seqIdx) const
     {
         // Returns pointer to array of offsets to K or V cache for one specific sequence seqIdx.
         // seqIdx is in range [0; B]
@@ -173,27 +173,27 @@ struct KVBlockArray : public KVBlockArrayForContextFMHA
             reinterpret_cast<char*>(getPoolPtr(offset)) + offset.get() * static_cast<uint64_t>(mBytesPerBlock));
     }
 
-    __host__ __device__ [[nodiscard]] inline void* getBlockPtr(int32_t seqIdx, int32_t tokenIdx, KVIdxType kvIdx) const
+    [[nodiscard]] __host__ __device__ inline void* getBlockPtr(int32_t seqIdx, int32_t tokenIdx, KVIdxType kvIdx) const
     {
         return getBlockPtr(getRowPtr(kvIdx, seqIdx), tokenIdx);
     }
 
-    __host__ __device__ [[nodiscard]] inline void* getKBlockPtr(int32_t seqIdx, int32_t tokenIdx) const
+    [[nodiscard]] __host__ __device__ inline void* getKBlockPtr(int32_t seqIdx, int32_t tokenIdx) const
     {
         return getBlockPtr(seqIdx, tokenIdx, KVIdxType::K_IDX);
     }
 
-    __host__ __device__ [[nodiscard]] inline void* getVBlockPtr(int32_t seqIdx, int32_t tokenIdx) const
+    [[nodiscard]] __host__ __device__ inline void* getVBlockPtr(int32_t seqIdx, int32_t tokenIdx) const
     {
         return getBlockPtr(seqIdx, tokenIdx, KVIdxType::V_IDX);
     }
 
-    __host__ __device__ [[nodiscard]] inline int32_t getLocalIdx(int32_t globalIdx) const
+    [[nodiscard]] __host__ __device__ inline int32_t getLocalIdx(int32_t globalIdx) const
     {
         return globalIdx & ((1 << mTokensPerBlockLog2) - 1);
     }
 
-    __host__ __device__ [[nodiscard]] inline int32_t getKVLocalIdx(
+    [[nodiscard]] __host__ __device__ inline int32_t getKVLocalIdx(
         int32_t globalTokenIdx, int32_t headIdx, int32_t dimsPerHead, int32_t channelIdx) const
     {
         // For K or V, the hidden dimension per head is *not* decomposed. The layout of each block of K or V is:
@@ -204,7 +204,7 @@ struct KVBlockArray : public KVBlockArrayForContextFMHA
     }
 
 private:
-    __host__ __device__ [[nodiscard]] void* getPoolPtr(DataType offset) const
+    [[nodiscard]] __host__ __device__ void* getPoolPtr(DataType offset) const
     {
         return offset.isPrimary() ? mPrimaryPoolPtr : mSecondaryPoolPtr;
     }
@@ -279,18 +279,18 @@ struct KVLinearBuffer
         mEnableOneMoreBlock = false;
     }
 
-    __host__ __device__ [[nodiscard]] inline bool isSinkToken(int32_t tokenIdx) const
+    [[nodiscard]] __host__ __device__ inline bool isSinkToken(int32_t tokenIdx) const
     {
         return tokenIdx < mSinkTokens;
     }
 
-    __host__ __device__ [[nodiscard]] inline void** getRowPtr(KVIdxType kvIdx, int32_t seqIdx) const
+    [[nodiscard]] __host__ __device__ inline void** getRowPtr(KVIdxType kvIdx, int32_t seqIdx) const
     {
         return reinterpret_cast<void**>(data + seqIdx * mBytesPerSeq * mValidRowsPerSeq
             + static_cast<int32_t>(kvIdx) * mBytesPerSeq * (mValidRowsPerSeq - 1));
     }
 
-    __host__ __device__ [[nodiscard]] inline int32_t getKVTokenIdx(int32_t tokenIdx) const
+    [[nodiscard]] __host__ __device__ inline int32_t getKVTokenIdx(int32_t tokenIdx) const
     {
         if (!isSinkToken(tokenIdx))
         {
@@ -305,17 +305,17 @@ struct KVLinearBuffer
         return reinterpret_cast<void*>(pointer);
     }
 
-    __host__ __device__ [[nodiscard]] inline void* getKBlockPtr(int32_t seqIdx, int32_t /*tokenIdx*/) const
+    [[nodiscard]] __host__ __device__ inline void* getKBlockPtr(int32_t seqIdx, int32_t /*tokenIdx*/) const
     {
         return reinterpret_cast<void*>(getRowPtr(KVIdxType::K_IDX, seqIdx));
     }
 
-    __host__ __device__ [[nodiscard]] inline void* getVBlockPtr(int32_t seqIdx, int32_t /*tokenIdx*/) const
+    [[nodiscard]] __host__ __device__ inline void* getVBlockPtr(int32_t seqIdx, int32_t /*tokenIdx*/) const
     {
         return reinterpret_cast<void*>(getRowPtr(KVIdxType::V_IDX, seqIdx));
     }
 
-    __host__ __device__ [[nodiscard]] inline int32_t getKVLocalIdx(
+    [[nodiscard]] __host__ __device__ inline int32_t getKVLocalIdx(
         int32_t tokenIdx, int32_t headIdx, int32_t dimsPerHead, int32_t channelIdx) const
     {
         return headIdx * mMaxSeqLen * dimsPerHead + tokenIdx * dimsPerHead + channelIdx;

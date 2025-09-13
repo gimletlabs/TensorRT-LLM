@@ -286,7 +286,7 @@ void invokeGeneralLayerNorm(T* out, T const* input, T const* gamma, T const* bet
     float const* scale, float* dynamic_scale, float* sum_per_token, QuantT* normed_output_quant)
 {
     dim3 grid(tokens);
-    dim3 block(min(hidden_dim, 1024));
+    dim3 block(std::min(hidden_dim, 1024));
     // Make sure block.x is multiple of 32 for warp shuffle to work
     block.x = 32 * ((block.x + 31) / 32);
 

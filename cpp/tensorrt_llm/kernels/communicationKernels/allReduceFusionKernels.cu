@@ -293,7 +293,7 @@ protected:
             acc += v * v;
         }
         tensorrt_llm::common::blockReduceSumV2<float, 1>(&acc);
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
         cg::cluster_group cluster = cg::this_cluster();
         if (cluster.num_blocks() > 1)
         {
@@ -414,7 +414,7 @@ class IndexHelper
 public:
     __device__ __forceinline__ IndexHelper(AllReduceFusionParams const& params)
     {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
         namespace cg = cooperative_groups;
         cg::cluster_group cluster = cg::this_cluster();
         cg::grid_group grid = cg::this_grid();

@@ -466,7 +466,7 @@ struct AdaBlockwiseGemmKernel
 
         // (4) push all the result to smem
         // (4.1) convert result from ElementAccum to ElementA
-        cute::Tensor epi = util_convert_type<KT::ElementOutput>(accum);
+        cute::Tensor epi = util_convert_type<typename KT::ElementOutput>(accum);
 
         // (4.2) rf -> smem
         auto smem_tiled_copy_R2S = cute::make_tiled_copy_C(typename KT::SmemCopyAtomR2S{}, tiled_mma);
@@ -483,7 +483,7 @@ struct AdaBlockwiseGemmKernel
         typename KT::SmemTiledCopyS2R smem_tiled_copy_S2R;
         auto smem_thr_copy_S2R = smem_tiled_copy_S2R.get_thread_slice(thread_idx);
         cute::Tensor tSR_sO = smem_thr_copy_S2R.partition_S(sO);
-        cute::Tensor tSR_rO = cute::make_tensor<KT::ElementOutput>(cute::shape(tSR_sO));
+        cute::Tensor tSR_rO = cute::make_tensor<typename KT::ElementOutput>(cute::shape(tSR_sO));
 
         cute::copy(smem_tiled_copy_S2R, tSR_sO, tSR_rO);
         __syncthreads();

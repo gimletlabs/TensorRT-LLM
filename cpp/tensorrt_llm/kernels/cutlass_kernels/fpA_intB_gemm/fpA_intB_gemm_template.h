@@ -415,10 +415,10 @@ template <typename ActivationType, typename WeightType, cutlass::WeightOnlyQuant
     typename BiasType, typename OutputType>
 template <typename EpilogueTag>
 void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, BiasType,
-    OutputType>::dispatch_to_arch<EpilogueTag>(ActivationType const* A, WeightType const* B,
-    ScaleZeroType const* weight_scales, ScaleZeroType const* weight_zero_points, BiasType const* biases,
-    float const alpha, OutputType* C, int m, int n, int k, int const group_size, tkc::CutlassGemmConfig gemm_config,
-    char* workspace_ptr, const size_t workspace_bytes, cudaStream_t stream, int* occupancy)
+    OutputType>::dispatch_to_arch(ActivationType const* A, WeightType const* B, ScaleZeroType const* weight_scales,
+    ScaleZeroType const* weight_zero_points, BiasType const* biases, float const alpha, OutputType* C, int m, int n,
+    int k, int const group_size, tkc::CutlassGemmConfig gemm_config, char* workspace_ptr, const size_t workspace_bytes,
+    cudaStream_t stream, int* occupancy)
 {
     TLLM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (sm_ >= 75 && sm_ < 80)

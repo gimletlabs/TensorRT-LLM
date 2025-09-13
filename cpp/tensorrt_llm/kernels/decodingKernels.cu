@@ -106,7 +106,7 @@ __global__ void gatherTree(gatherTreeParam param)
                 maxLen = tmpLen;
             }
         }
-        int const maxSeqLenB = min(param.maxSeqLen, maxLen);
+        int const maxSeqLenB = std::min(param.maxSeqLen, maxLen);
         if (maxSeqLenB <= 0)
         {
             continue;
@@ -465,7 +465,7 @@ __global__ void finalizeKernel(BeamHypotheses bh)
                 int const index = tid + 1024 * j;
                 float const score = (index < bh.numBeamsCBA[bid]) ? smemScore[index] : -FLT_MAX;
                 float const maxScore1 = blockReduceMax<float>(score);
-                maxScore = max(maxScore, maxScore1);
+                maxScore = std::max(maxScore, maxScore1);
             }
             if (tid == 0)
             {
@@ -522,7 +522,7 @@ __global__ void finalizeKernel(BeamHypotheses bh)
 void invokeFinalize(BeamHypotheses& bh, cudaStream_t stream)
 {
     int const nBM = bh.nBeamWidth;
-    int const nThread = min(roundUp(nBM * 2, 32), 1024);
+    int const nThread = std::min(roundUp(nBM * 2, 32), 1024);
     size_t const nByteSharedMemory = (sizeof(int) + sizeof(float)) * nBM * 2;
     finalizeKernel<<<bh.nBatchSize, nThread, nByteSharedMemory, stream>>>(bh);
     sync_check_cuda_error(stream);
@@ -670,7 +670,7 @@ void invokeCopyNextStepIds(TokenIdType* nextStepIds, TokenIdType const* const* o
     SizeType32 maxTokensPerStep, cudaStream_t stream)
 {
     int const numElems = batchSize * beamWidth * maxTokensPerStep;
-    dim3 block(min(256, numElems));
+    dim3 block(std::min(256, numElems));
     dim3 grid(divUp(numElems, block.x));
     copyNextStepIds<<<grid, block, 0, stream>>>(nextStepIds, outputIdsPtr, sequenceLengths, numNewTokens, batchSlots,
         batchSize, maxBatchSize, beamWidth, maxSeqLen, maxTokensPerStep);

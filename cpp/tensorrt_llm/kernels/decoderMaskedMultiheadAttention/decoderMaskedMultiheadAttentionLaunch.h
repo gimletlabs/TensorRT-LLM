@@ -49,7 +49,7 @@ inline size_t smem_size_in_bytes(Multihead_attention_params<T, DO_CROSS_ATTENTIO
         std::min(params.cyclic_attention_window_size, params.chunked_attention_size), std::max(params.seq_len_tile, 1));
     auto const max_timesteps = DO_CROSS_ATTENTION
         ? attention_window_size_bound
-        : min((DO_MULTI_BLOCK ? params.timesteps_per_block : params.timestep), attention_window_size_bound);
+        : std::min((DO_MULTI_BLOCK ? params.timesteps_per_block : params.timestep), attention_window_size_bound);
     auto const qk_elts = static_cast<std::size_t>(divUp(max_timesteps + 1, 4)); // explicit cast because of the sign
     auto const qk_sz = qk_elts * 16;
 
@@ -90,7 +90,7 @@ inline size_t smem_size_in_bytes(Multihead_attention_params<T, DO_CROSS_ATTENTIO
     }
 
     // The max.
-    return max(max(max(softmax_sz, red_sz), transpose_rotary_size), out_oi_sz);
+    return std::max(std::max(std::max(softmax_sz, red_sz), transpose_rotary_size), out_oi_sz);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -277,11 +277,11 @@ void mmha_launch_kernel_ex(KernelParamsType const& params, KVCacheBuffer const& 
             IMPLICIT_REL_ATTN_BIAS, ATTN_LOGIT_SOFTCAPPING>,
         THDS_PER_BLOCK, 0));
 
-    int block_size_factor
-        = min(mmha::divUp(params.multi_processor_count * num_blocks_per_sm, kernel_total_blocks), num_blocks_per_sm);
+    int block_size_factor = std::min(
+        mmha::divUp(params.multi_processor_count * num_blocks_per_sm, kernel_total_blocks), num_blocks_per_sm);
 
     // Max block size is 1024.
-    int dynamic_block_size = min(THDS_PER_BLOCK * block_size_factor, 1024);
+    int dynamic_block_size = std::min(THDS_PER_BLOCK * block_size_factor, 1024);
 
     // Check if resources are enough for launch.
     int available_blocks = -1;

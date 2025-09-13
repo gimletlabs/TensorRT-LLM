@@ -184,7 +184,7 @@ __device__ void reduceTopK(cg::thread_block_tile<WarpSize> const& warp, Type (&o
 
 #define TOPK_SWAP(I, J)                                                                                                \
     {                                                                                                                  \
-        auto pairMin = min(topK[I].compVal, topK[J].compVal);                                                          \
+        auto pairMin = std::min(topK[I].compVal, topK[J].compVal);                                                     \
         auto pairMax = max(topK[I].compVal, topK[J].compVal);                                                          \
         topK[I].compVal = pairMax;                                                                                     \
         topK[J].compVal = pairMin;                                                                                     \
@@ -303,7 +303,7 @@ __global__ void routingMainKernel(KernelParams params)
     auto scoreIdx = int64_t{blockIdx.x} * int64_t{params.mNumExperts} + threadExpert;
     auto biasVal = expertSelected ? params.mPtrRoutingBias[threadExpert] : invalidScore;
 
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+#if (defined(_CG_HAS_CLUSTER_GROUP))
     // trigger the secondary kernel when using PDL, then wait on primary
     if constexpr (KernelParams::UsePdl)
     {
@@ -439,7 +439,7 @@ __global__ void routingMainKernel(KernelParams params)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __cluster_dims__(NumBlocksPerCluster, 1, 1) __launch_bounds__(NumThreads)
     routingIndicesClusterKernel(KernelParams params)
 {
@@ -581,8 +581,9 @@ __global__ void __cluster_dims__(NumBlocksPerCluster, 1, 1) __launch_bounds__(Nu
     {
         const int32_t localExpertIdx = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
         params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
-        params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta] = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
-            mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + tokensPerTile);
+        params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
+            = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + tokensPerTile);
     }
 
     // get the padded offset associated with this expert
@@ -656,7 +657,7 @@ __global__ void routingIndicesClusterKernel(KernelParams params)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __launch_bounds__(NumThreads) routingIndicesCoopKernel(KernelParams params)
 {
     // number of experts is bounded by number of threads
@@ -782,8 +783,9 @@ __global__ void __launch_bounds__(NumThreads) routingIndicesCoopKernel(KernelPar
     {
         const int32_t localExpertIdx = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
         params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
-        params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta] = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
-            mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + tokensPerTile);
+        params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
+            = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + tokensPerTile);
     }
 
     // get the padded offset associated with this expert
@@ -859,7 +861,7 @@ __global__ void routingIndicesCoopKernel(KernelParams params)
 // inefficient if we have one CTA per token doing a single global atomic.
 
 template <typename KernelParams>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __launch_bounds__(NumThreads) routingIndicesHistogramKernel(KernelParams params)
 {
     // number of experts is bounded by number of threads
@@ -942,7 +944,7 @@ __global__ void routingIndicesHistogramKernel(KernelParams params)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __launch_bounds__(NumThreads) routingIndicesOffsetsKernel(KernelParams params)
 {
     // number of experts is bounded by number of threads
@@ -1004,8 +1006,9 @@ __global__ void __launch_bounds__(NumThreads) routingIndicesOffsetsKernel(Kernel
     {
         const int32_t localExpertIdx = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
         params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
-        params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta] = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
-            mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + tokensPerTile);
+        params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
+            = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + tokensPerTile);
     }
 
     //
@@ -1482,7 +1485,7 @@ __device__ void reduceTopK(cg::thread_block_tile<WarpSize> const& warp, Type (&o
 
 #define TOPK_SWAP(I, J)                                                                                                \
     {                                                                                                                  \
-        auto pairMin = min(topK[I].compVal, topK[J].compVal);                                                          \
+        auto pairMin = std::min(topK[I].compVal, topK[J].compVal);                                                     \
         auto pairMax = max(topK[I].compVal, topK[J].compVal);                                                          \
         topK[I].compVal = pairMax;                                                                                     \
         topK[J].compVal = pairMin;                                                                                     \
@@ -1577,7 +1580,7 @@ __host__ __device__ constexpr void setBits(int32_t& value, int32_t newBits, int 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __launch_bounds__(WarpSize) routingIndicesWarpKernel(KernelParams params)
 {
     // types used in this kernel
@@ -1730,7 +1733,7 @@ __global__ void __launch_bounds__(WarpSize) routingIndicesWarpKernel(KernelParam
         {
             params.mPtrCtaIdxXyToBatchIdx[ctaOffsetExp + cta] = expertIdx;
             params.mPtrCtaIdxXyToMnLimit[ctaOffsetExp + cta]
-                = min(mulLog2<int32_t>(ctaOffsetExp + cta + 1, params.mPaddingLog2),
+                = std::min(mulLog2<int32_t>(ctaOffsetExp + cta + 1, params.mPaddingLog2),
                     mulLog2<int32_t>(ctaOffsetExp, params.mPaddingLog2) + count);
         }
         ctaOffsetExp += finalNumCta;
@@ -1816,7 +1819,7 @@ __global__ void routingIndicesWarpKernel(KernelParams params)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __cluster_dims__(NumBlocksPerCluster, 1, 1) __launch_bounds__(NumThreads)
     routingIndicesClusterKernel(KernelParams params)
 {
@@ -1998,7 +2001,7 @@ __global__ void __cluster_dims__(NumBlocksPerCluster, 1, 1) __launch_bounds__(Nu
                 = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
             params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
             params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
-                = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
                     mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + count);
         }
 
@@ -2319,7 +2322,7 @@ __global__ void __launch_bounds__(NumThreadsHist) routingIndicesOffsetsKernel(Ke
                 = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
             params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
             params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
-                = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
                     mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + count);
         }
     }
@@ -2745,7 +2748,7 @@ __device__ void reduceTopK(cg::thread_block_tile<WarpSize> const& warp, Type (&o
 
 #define TOPK_SWAP(I, J)                                                                                                \
     {                                                                                                                  \
-        auto pairMin = min(topK[I].compVal, topK[J].compVal);                                                          \
+        auto pairMin = std::min(topK[I].compVal, topK[J].compVal);                                                     \
         auto pairMax = max(topK[I].compVal, topK[J].compVal);                                                          \
         topK[I].compVal = pairMax;                                                                                     \
         topK[J].compVal = pairMin;                                                                                     \
@@ -2907,7 +2910,7 @@ __device__ TypeExpW calcSoftmax(
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams, bool DoSoftmaxBeforeTopK = false>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
 __global__ void __cluster_dims__(NumBlocksPerCluster, 1, 1) __launch_bounds__(NumThreads)
     routingIndicesClusterKernel(KernelParams params)
 {
@@ -3135,7 +3138,7 @@ __global__ void __cluster_dims__(NumBlocksPerCluster, 1, 1) __launch_bounds__(Nu
                 = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
             params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
             params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
-                = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
                     mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + count);
         }
 
@@ -3511,7 +3514,7 @@ __global__ void __launch_bounds__(NumThreadsHist) routingIndicesOffsetsKernel(Ke
                 = (threadIdx.x - params.mLocalExpertsStartIdx) >> params.mLocalExpertsStrideLog2;
             params.mPtrCtaIdxXyToBatchIdx[ctaOffset + cta] = localExpertIdx;
             params.mPtrCtaIdxXyToMnLimit[ctaOffset + cta]
-                = min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
+                = std::min(mulLog2<int32_t>(ctaOffset + cta + 1, params.mPaddingLog2),
                     mulLog2<int32_t>(ctaOffset, params.mPaddingLog2) + count);
         }
     }

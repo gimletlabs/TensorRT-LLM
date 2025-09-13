@@ -624,7 +624,7 @@ __forceinline__ __device__ void compute_attn_1rowblock_splitkv_mla(Flash_fwd_mla
             }
 
             typename Kernel_traits::TiledMma tiled_mma;
-            auto tSrS_layout = flash::convert_layout_acc_Aregs<Kernel_traits::TiledMmaO>(
+            auto tSrS_layout = flash::convert_layout_acc_Aregs<typename Kernel_traits::TiledMmaO>(
                 partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kBlockN>>{}).layout());
             Tensor tOrP = make_tensor<Element>(tSrS_layout);
             Tensor scale_o = make_tensor<float>(Shape<_2>{});

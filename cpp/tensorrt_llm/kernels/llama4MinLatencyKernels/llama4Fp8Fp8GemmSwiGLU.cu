@@ -19,6 +19,7 @@
 
 #include <map>
 #include <stdexcept>
+#include <vector>
 
 namespace tensorrt_llm::kernels::llama4_min_latency::llama4_fp8_fp8_gemm_swiglu
 {

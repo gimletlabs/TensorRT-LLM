@@ -81,6 +81,7 @@ __device__ __forceinline__ PackedType add128(PackedType const& a, PackedType con
     return c;
 }
 
+#if defined(_CG_HAS_CLUSTER_GROUP)
 template <typename DType, typename PackedType>
 __device__ __forceinline__ PackedType rms_norm(
     PackedType const& residual, PackedType const& gamma, float const eps, int hidden_dim)
@@ -128,6 +129,7 @@ __device__ __forceinline__ PackedType rms_norm(
     }
     return norm_out;
 }
+#endif
 
 template <bool ResidualOut, bool NormOut, bool QuantOut, typename DType, typename PackedType>
 __device__ __forceinline__ void fused_op(
@@ -214,7 +216,7 @@ bool use_oneshot(int token_num)
 template <typename DType, int NRanks, bool ResidualOut, bool NormOut, bool QuantOut>
 __global__ void moereduce_allreduce_fusion_kernel_oneshot_lamport(MoeReductionAllReduceFusionParams params)
 {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
     namespace cg = cooperative_groups;
     cg::cluster_group cluster = cg::this_cluster();
     cg::grid_group grid = cg::this_grid();
@@ -490,7 +492,7 @@ void moereduction_allreduce_fusion_op(MoeReductionAllReduceFusionParams const& p
 template <typename DType, int NRanks, bool ResidualOut, bool NormOut, bool QuantOut, typename ScaleType = DType>
 __global__ void moefinalize_allreduce_fusion_kernel_oneshot_lamport(MoeFinalizeAllReduceFusionParams params)
 {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+#if (defined(_CG_HAS_CLUSTER_GROUP))
     namespace cg = cooperative_groups;
     cg::cluster_group cluster = cg::this_cluster();
     cg::grid_group grid = cg::this_grid();
