@@ -802,7 +802,7 @@ __device__ void warpgroup_fence_operand(float& reg)
 __forceinline__ __device__ uint32_t get_lane_id()
 {
     uint32_t lane_id;
-    asm("mov.u32 %0, %laneid;" : "=r"(lane_id));
+    asm("mov.u32 %0, %%laneid;" : "=r"(lane_id));
     return lane_id;
 }
 

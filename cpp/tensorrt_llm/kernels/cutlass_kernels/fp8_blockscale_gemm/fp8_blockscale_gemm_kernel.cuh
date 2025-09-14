@@ -136,11 +136,11 @@ __inline__ __device__ uint32_t elect_one_sync([[maybe_unused]] int lane_id)
     asm volatile(
         "\n\
     {\n\
-        .reg .b32 %rx;\n\
-        .reg .pred %px;\n\
-        elect.sync %rx|%px, %2;\n\
-        @%px mov.s32 %1, 1;\n\
-        mov.s32 %0, %rx;\n\
+        .reg .b32 %%rx;\n\
+        .reg .pred %%px;\n\
+        elect.sync %%rx|%%px, %2;\n\
+        @%%px mov.s32 %1, 1;\n\
+        mov.s32 %0, %%rx;\n\
     }\n\
   "
         : "+r"(laneid), "+r"(pred)
