@@ -17,7 +17,9 @@
 
 #pragma once
 
-#include "low_latency_gemm.h"
+// Specified this path instead of just the file name to disambiguate "opened cutlass" from "internal cutlass"
+// And this file specifically uses "internal cutlass"
+#include "tensorrt_llm/kernels/internal_cutlass_kernels/include/low_latency_gemm.h"
 
 #include "tensorrt_llm/plugins/common/gemmPluginProfiler.h"
 #include "tensorrt_llm/plugins/common/plugin.h"
