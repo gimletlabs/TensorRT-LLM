@@ -21,6 +21,10 @@
 #include <cute/numeric/integral_ratio.hpp>
 #include <cute/tensor.hpp>
 
+// Override other definitions so that these calls can be used on device. Otherwise they are not propagated properly via
+// define flags in the compiler.
+#define CUTE_HOST_RTC CUTE_HOST_DEVICE
+
 namespace cute
 {
 // Utility for unpacking tensor into registers for multimem CopyOp
