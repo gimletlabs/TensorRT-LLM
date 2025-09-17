@@ -469,7 +469,7 @@ struct Hgmma_rfa_fp16<8, TB>
             "{%0, %1}, {%2, %3, %4, %5}, %6, 1, 1, 1, %7;\n"
 
             : "+r"(acc[0]), "+r"(acc[1])
-            : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(desc_a), "l"(desc_b), "n"(trans_b));
+            : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(desc_b), "n"(trans_b));
 #endif
     }
 };
