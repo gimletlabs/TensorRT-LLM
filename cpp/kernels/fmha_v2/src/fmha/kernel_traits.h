@@ -930,8 +930,14 @@ struct Gmem_tile_o_dispatcher
 {
 
     template <typename Traits, typename Cta_tile, int CTAS_PER_HEAD>
-    using Gmem_tile_o = fmha::v2::Gmem_tile_o<Traits, Cta_tile, CTAS_PER_HEAD>;
+    struct Gmem_tile_o : fmha::v2::Gmem_tile_o<Traits, Cta_tile, CTAS_PER_HEAD>
+    {
+    };
 };
+
+// Template alias to make dispatcher work as template template parameter
+template <typename Traits, typename Cta_tile, int CTAS_PER_HEAD>
+using Gmem_tile_o_default = fmha::v2::Gmem_tile_o<Traits, Cta_tile, CTAS_PER_HEAD>;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -940,7 +946,9 @@ struct Gmem_tile_o_dispatcher<fmha::Ada_qmma_e4m3_fp32_traits, uint16_t>
 {
 
     template <typename Traits, typename Cta_tile, int CTAS_PER_HEAD>
-    using Gmem_tile_o = fmha::v2::Gmem_tile_o_uint16<Traits, Cta_tile, CTAS_PER_HEAD>;
+    struct Gmem_tile_o : fmha::v2::Gmem_tile_o_uint16<Traits, Cta_tile, CTAS_PER_HEAD>
+    {
+    };
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -950,7 +958,9 @@ struct Gmem_tile_o_dispatcher<fmha::Ada_qmma_e4m3_fp32_traits, nv_bfloat16>
 {
 
     template <typename Traits, typename Cta_tile, int CTAS_PER_HEAD>
-    using Gmem_tile_o = fmha::v2::Gmem_tile_o_bfloat16<Traits, Cta_tile, CTAS_PER_HEAD>;
+    struct Gmem_tile_o : fmha::v2::Gmem_tile_o_bfloat16<Traits, Cta_tile, CTAS_PER_HEAD>
+    {
+    };
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -983,76 +993,75 @@ template <
     // The sage attention block size for Q, K and V
     int SAGE_BLOCK_SIZE_Q = 0, int SAGE_BLOCK_SIZE_K = 0, int SAGE_BLOCK_SIZE_V = 0>
 using Kernel_traits_v2 = Kernel_traits_<Traits, fmha::v2::Gmem_tile_qkv, fmha::v2::Gmem_tile_qkv,
-    fmha::v2::Gmem_tile_qkv, Gmem_tile_o_dispatcher<Traits, OutputType>::Gmem_tile_o, S, D, DV, STEP, WARPS_M, WARPS_N,
-    CTAS_PER_HEAD, FLAGS, 2, MASK_VERSION, BMM2_FP16_EPILOGUE, SAGE_BLOCK_SIZE_Q, SAGE_BLOCK_SIZE_K, SAGE_BLOCK_SIZE_V>;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-template <
-    // The instruction traits.
-    typename Traits,
-    // The sequence length.
-    int S,
-    // The hidden size per head.
-    int D,
-    // The hidden dimension of V.
-    int DV,
-    // The number of timesteps per iteration of the main loop.
-    int STEP,
-    // The number of vertical warps.
-    int WARPS_M,
-    // The number of horizontal warps.
-    int WARPS_N,
-    // The number of CTAs per head for Cta_tile_p; equivalent to BMM1 split-K
-    int CTAS_PER_HEAD,
-    // The flags.
-    uint32_t FLAGS = 0x8,
-    // The attention mask version (see src/mask.h).
-    int MASK_VERSION = 2,
-    // Do we use half epilogue for the 2nd GEMM (hmma_fp32)
-    bool BMM2_FP16_EPILOGUE = true,
-    // The output type.
-    typename OutputType = typename Traits::A_type,
-    // The sage attention block size for Q, K and V
-    int SAGE_BLOCK_SIZE_Q = 0, int SAGE_BLOCK_SIZE_K = 0, int SAGE_BLOCK_SIZE_V = 0>
-using Kernel_traits_v2_paged_kv_cache
-    = Kernel_traits_<Traits, fmha::v2::Gmem_tile_q, fmha::v2::Gmem_tile_paged_kv, fmha::v2::Gmem_tile_paged_kv,
-        Gmem_tile_o_dispatcher<Traits, OutputType>::Gmem_tile_o, S, D, DV, STEP, WARPS_M, WARPS_N, CTAS_PER_HEAD, FLAGS,
-        2, MASK_VERSION, BMM2_FP16_EPILOGUE, SAGE_BLOCK_SIZE_Q, SAGE_BLOCK_SIZE_K, SAGE_BLOCK_SIZE_V>;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-template <
-    // The instruction traits.
-    typename Traits,
-    // The sequence length.
-    int S,
-    // The hidden size per head.
-    int D,
-    // The hidden dimension of V.
-    int DV,
-    // The number of timesteps per iteration of the main loop.
-    int STEP,
-    // The number of vertical warps.
-    int WARPS_M,
-    // The number of horizontal warps.
-    int WARPS_N,
-    // The number of CTAs per head for Cta_tile_p; equivalent to BMM1 split-K
-    int CTAS_PER_HEAD,
-    // The flags.
-    uint32_t FLAGS = 0x8,
-    // The attention mask version (see src/mask.h).
-    int MASK_VERSION = 2,
-    // Do we use half epilogue for the 2nd GEMM (hmma_fp32)
-    bool BMM2_FP16_EPILOGUE = true,
-    // The output type.
-    typename OutputType = typename Traits::A_type,
-    // The sage attention block size for Q, K and V
-    int SAGE_BLOCK_SIZE_Q = 0, int SAGE_BLOCK_SIZE_K = 0, int SAGE_BLOCK_SIZE_V = 0>
-using Kernel_traits_v2_contiguous_kv_cache = Kernel_traits_<Traits, fmha::v2::Gmem_tile_q,
-    fmha::v2::Gmem_tile_contiguous_kv, fmha::v2::Gmem_tile_contiguous_kv,
-    Gmem_tile_o_dispatcher<Traits, OutputType>::Gmem_tile_o, S, D, 0, STEP, WARPS_M, WARPS_N, CTAS_PER_HEAD, FLAGS, 2,
+    fmha::v2::Gmem_tile_qkv, Gmem_tile_o_default, S, D, DV, STEP, WARPS_M, WARPS_N, CTAS_PER_HEAD, FLAGS, 2,
     MASK_VERSION, BMM2_FP16_EPILOGUE, SAGE_BLOCK_SIZE_Q, SAGE_BLOCK_SIZE_K, SAGE_BLOCK_SIZE_V>;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <
+    // The instruction traits.
+    typename Traits,
+    // The sequence length.
+    int S,
+    // The hidden size per head.
+    int D,
+    // The hidden dimension of V.
+    int DV,
+    // The number of timesteps per iteration of the main loop.
+    int STEP,
+    // The number of vertical warps.
+    int WARPS_M,
+    // The number of horizontal warps.
+    int WARPS_N,
+    // The number of CTAs per head for Cta_tile_p; equivalent to BMM1 split-K
+    int CTAS_PER_HEAD,
+    // The flags.
+    uint32_t FLAGS = 0x8,
+    // The attention mask version (see src/mask.h).
+    int MASK_VERSION = 2,
+    // Do we use half epilogue for the 2nd GEMM (hmma_fp32)
+    bool BMM2_FP16_EPILOGUE = true,
+    // The output type.
+    typename OutputType = typename Traits::A_type,
+    // The sage attention block size for Q, K and V
+    int SAGE_BLOCK_SIZE_Q = 0, int SAGE_BLOCK_SIZE_K = 0, int SAGE_BLOCK_SIZE_V = 0>
+using Kernel_traits_v2_paged_kv_cache = Kernel_traits_<Traits, fmha::v2::Gmem_tile_q, fmha::v2::Gmem_tile_paged_kv,
+    fmha::v2::Gmem_tile_paged_kv, Gmem_tile_o_default, S, D, DV, STEP, WARPS_M, WARPS_N, CTAS_PER_HEAD, FLAGS, 2,
+    MASK_VERSION, BMM2_FP16_EPILOGUE, SAGE_BLOCK_SIZE_Q, SAGE_BLOCK_SIZE_K, SAGE_BLOCK_SIZE_V>;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <
+    // The instruction traits.
+    typename Traits,
+    // The sequence length.
+    int S,
+    // The hidden size per head.
+    int D,
+    // The hidden dimension of V.
+    int DV,
+    // The number of timesteps per iteration of the main loop.
+    int STEP,
+    // The number of vertical warps.
+    int WARPS_M,
+    // The number of horizontal warps.
+    int WARPS_N,
+    // The number of CTAs per head for Cta_tile_p; equivalent to BMM1 split-K
+    int CTAS_PER_HEAD,
+    // The flags.
+    uint32_t FLAGS = 0x8,
+    // The attention mask version (see src/mask.h).
+    int MASK_VERSION = 2,
+    // Do we use half epilogue for the 2nd GEMM (hmma_fp32)
+    bool BMM2_FP16_EPILOGUE = true,
+    // The output type.
+    typename OutputType = typename Traits::A_type,
+    // The sage attention block size for Q, K and V
+    int SAGE_BLOCK_SIZE_Q = 0, int SAGE_BLOCK_SIZE_K = 0, int SAGE_BLOCK_SIZE_V = 0>
+using Kernel_traits_v2_contiguous_kv_cache
+    = Kernel_traits_<Traits, fmha::v2::Gmem_tile_q, fmha::v2::Gmem_tile_contiguous_kv,
+        fmha::v2::Gmem_tile_contiguous_kv, Gmem_tile_o_default, S, D, 0, STEP, WARPS_M, WARPS_N, CTAS_PER_HEAD, FLAGS,
+        2, MASK_VERSION, BMM2_FP16_EPILOGUE, SAGE_BLOCK_SIZE_Q, SAGE_BLOCK_SIZE_K, SAGE_BLOCK_SIZE_V>;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 

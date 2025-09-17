@@ -530,7 +530,7 @@ struct Compute_tile_with_gmma<Traits, Cta_tile, Smem_tile_a, Smem_tile_b,
             int2& tmp = reinterpret_cast<int2&>(temp_desc);
 
             constexpr int BYTES_PER_K_GROUP_NO_4LSB
-                = Mma_tile::K_PER_WARP_GROUP * Mma_tile::N_PER_WARP_GROUP * sizeof(Traits::B_type) / 16;
+                = Mma_tile::K_PER_WARP_GROUP * Mma_tile::N_PER_WARP_GROUP * sizeof(typename Traits::B_type) / 16;
             tmp.x += warp_k * BYTES_PER_K_GROUP_NO_4LSB;
             gmma_desc_b_[0].set_descriptor(0, temp_desc);
 

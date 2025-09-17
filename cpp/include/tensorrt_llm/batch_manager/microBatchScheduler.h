@@ -31,6 +31,12 @@ struct ContextChunkingConfig
 {
     ContextChunkingConfig() = default;
 
+    ContextChunkingConfig(executor::ContextChunkingPolicy policy, tensorrt_llm::runtime::SizeType32 unitSize)
+        : chunkingPolicy(policy)
+        , chunkUnitSize(unitSize)
+    {
+    }
+
     executor::ContextChunkingPolicy chunkingPolicy;
     /// The minimum size, also known as the chunk unit size. It generally
     /// needs to be equal to the size of the kv cache block or its integer

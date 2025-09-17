@@ -1014,10 +1014,14 @@ struct Softmax<Hopper_qgmma_e4m3_fp32_traits, Kernel_traits>
             float tmp_17 = this->elt_[1][8 * ni + 7]; // +25
 
             // Pack to 4 registers.
-            frag_p[ni].reg(0) = fmha::float4_to_fp8x4<Kernel_traits::Element_data_type>(tmp_00, tmp_01, tmp_02, tmp_03);
-            frag_p[ni].reg(1) = fmha::float4_to_fp8x4<Kernel_traits::Element_data_type>(tmp_10, tmp_11, tmp_12, tmp_13);
-            frag_p[ni].reg(2) = fmha::float4_to_fp8x4<Kernel_traits::Element_data_type>(tmp_04, tmp_05, tmp_06, tmp_07);
-            frag_p[ni].reg(3) = fmha::float4_to_fp8x4<Kernel_traits::Element_data_type>(tmp_14, tmp_15, tmp_16, tmp_17);
+            frag_p[ni].reg(0)
+                = fmha::float4_to_fp8x4<typename Kernel_traits::Element_data_type>(tmp_00, tmp_01, tmp_02, tmp_03);
+            frag_p[ni].reg(1)
+                = fmha::float4_to_fp8x4<typename Kernel_traits::Element_data_type>(tmp_10, tmp_11, tmp_12, tmp_13);
+            frag_p[ni].reg(2)
+                = fmha::float4_to_fp8x4<typename Kernel_traits::Element_data_type>(tmp_04, tmp_05, tmp_06, tmp_07);
+            frag_p[ni].reg(3)
+                = fmha::float4_to_fp8x4<typename Kernel_traits::Element_data_type>(tmp_14, tmp_15, tmp_16, tmp_17);
         }
 
         if (!IS_FIRST_COL)
@@ -1135,7 +1139,7 @@ struct Tile_o_epilogue<Hopper_hgmma_fp16_traits, Kernel_traits>
     using Mma_tile_o = typename Base::Mma_tile_o;
 
     // Base constructor.
-    using Base::Tile_o_epilogue_base;
+    using typename Base::Tile_o_epilogue_base;
 
     // Scale ctile_o output by 1/sum
     inline __device__ void scale(Compute_tile_o& ctile_o, float (&global_sum)[Mma_tile_o::CORES_M])
@@ -1174,7 +1178,7 @@ struct Tile_o_epilogue<Hopper_hgmma_fp32_traits, Kernel_traits>
     using Base = Tile_o_epilogue_base<Hopper_hgmma_fp32_traits, Kernel_traits>;
 
     // Base constructor.
-    using Base::Tile_o_epilogue_base;
+    using typename Base::Tile_o_epilogue_base;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1189,7 +1193,7 @@ struct Tile_o_epilogue<Hopper_hgmma_bf16_traits, Kernel_traits>
     using Base = Tile_o_epilogue_base<Hopper_hgmma_bf16_traits, Kernel_traits>;
 
     // Base constructor.
-    using Base::Tile_o_epilogue_base;
+    using typename Base::Tile_o_epilogue_base;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

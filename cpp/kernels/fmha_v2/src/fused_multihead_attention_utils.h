@@ -1322,7 +1322,7 @@ static inline int check_results(
             sqr_err += (double) err * err * inv_mn;
 
             // Does it fail?
-            if (isnan(a) || isnan(b) || err > epsilon)
+            if (std::isnan(a) || std::isnan(b) || err > epsilon)
             {
                 if (failed < 8)
                 {
@@ -1333,8 +1333,8 @@ static inline int check_results(
                 }
                 failed++;
             }
-            infs += !isfinite(a);
-            infs += !isfinite(b);
+            infs += !std::isfinite(a);
+            infs += !std::isfinite(b);
         }
     }
 

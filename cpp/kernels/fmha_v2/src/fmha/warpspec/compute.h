@@ -618,18 +618,18 @@ struct Compute
         }
 
         // Apply the alibi and mask.
-        softmax.apply_alibi_and_mask<APPLY_MASK>(
+        softmax.template apply_alibi_and_mask<APPLY_MASK>(
             ctile_p, params.alibi_params, alibi_head_scale, actual_kv_seqlen, row_offset, col_offset);
 
         // Softmax Exp, max/sum, and update scales.
-        softmax.compute_and_update_scale<IS_FIRST_COL>(p_max, p_sum);
+        softmax.template compute_and_update_scale<IS_FIRST_COL>(p_max, p_sum);
 
         // experiments show that here is the best place to load scales of V
         float scales_v[SAGE_BLOCKS_PER_STEP_V];
         LOAD_SCALES_V(scales_v)
 
         // Update flash attention scales and pack it for BMM2
-        softmax.pack<IS_FIRST_COL>(ctile_o, frag_p);
+        softmax.template pack<IS_FIRST_COL>(ctile_o, frag_p);
 
         if constexpr (ENABLE_MUTEX && Kernel_traits::ELEMENT_BYTES == 1)
         {
