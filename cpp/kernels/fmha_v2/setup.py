@@ -728,7 +728,10 @@ using Kernel_traits_nl_causal = fmha::{kernel_traits}<
     {kernel_flags} | 0x200 /* no_loop flag */,
     /*causal mask*/ 3,
     /*bmm2_fp16_epilogue*/ true,
-    {output_dtype_}>;
+    {output_dtype_},
+    0,
+    0,
+    0>;
 
 using Kernel_traits_nl_sliding_or_chunked_causal = fmha::{kernel_traits}<
     fmha::{instruction_traits},
@@ -742,7 +745,10 @@ using Kernel_traits_nl_sliding_or_chunked_causal = fmha::{kernel_traits}<
     {kernel_flags} | 0x200 /* no_loop flag */,
     /*sliding window causal mask*/ 4,
     /*bmm2_fp16_epilogue*/ true,
-    {output_dtype_}>;
+    {output_dtype_},
+    0,
+    0,
+    0>;
 
 using Kernel_traits_nl_custom_mask = fmha::{kernel_traits}<
     fmha::{instruction_traits},
@@ -756,7 +762,10 @@ using Kernel_traits_nl_custom_mask = fmha::{kernel_traits}<
     {kernel_flags} | 0x200 /* no_loop flag */,
     /*custom mask*/ 5,
     /*bmm2_fp16_epilogue*/ true,
-    {output_dtype_}>;
+    {output_dtype_},
+    0,
+    0,
+    0>;
 
 #if {padding_mask} // padding_mask
 
@@ -880,7 +889,10 @@ using Kernel_traits_nl_tiled_causal = fmha::{kernel_traits}<
     {kernel_flags} | 0x200 /* no_loop flag */,
     /*causal mask*/ 3,
     /*bmm2_fp16_epilogue*/ true,
-    {output_dtype_}>;
+    {output_dtype_},
+    0,
+    0,
+    0>;
 
 using Kernel_traits_nl_tiled_sliding_or_chunked_causal = fmha::{kernel_traits}<
     fmha::{instruction_traits},
@@ -894,7 +906,10 @@ using Kernel_traits_nl_tiled_sliding_or_chunked_causal = fmha::{kernel_traits}<
     {kernel_flags} | 0x200 /* no_loop flag */,
     /*sliding window causal mask*/ 4,
     /*bmm2_fp16_epilogue*/ true,
-    {output_dtype_}>;
+    {output_dtype_},
+    0,
+    0,
+    0>;
 
 using Kernel_traits_nl_tiled_custom_mask = fmha::{kernel_traits}<
     fmha::{instruction_traits},
@@ -908,7 +923,10 @@ using Kernel_traits_nl_tiled_custom_mask = fmha::{kernel_traits}<
     {kernel_flags} | 0x200 /* no_loop flag */,
     /*custom mask*/ 5,
     /*bmm2_fp16_epilogue*/ true,
-    {output_dtype_}>;
+    {output_dtype_},
+    0,
+    0,
+    0>;
 
 #if {padding_mask} // padding_mask
 
@@ -2161,7 +2179,7 @@ def get_kernel_code(kspec, kname, lname):
     params_str = 'reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params)' if generate_cu_trtllm else 'params'
     attn_mask_type_str = 'using Attention_mask_type = ContextAttentionMaskType;' if generate_cu_trtllm else 'using Attention_mask_type = fmha::Attention_mask_type;'
     bert_launch_params = '' if generate_cu_trtllm else 'using Launch_params = bert::Fused_multihead_attention_launch_params;'
-    include_str = '#include "../fused_multihead_attention_common.h"' if generate_cu_trtllm else ''
+    include_str = '#include "tensorrt_llm/kernels/contextFusedMultiHeadAttention/fused_multihead_attention_common.h"' if generate_cu_trtllm else ''
     num_compute_groups_str = '' if generate_cu_trtllm else 'static constexpr int NUM_COMPUTE_GROUPS = 2;'
     fused_multihead_attention_params_v2_str = 'Fused_multihead_attention_params_v2' if generate_cu_trtllm else f'{params_type}'
     const_fused_multihead_attention_params_v2_str = 'Fused_multihead_attention_params_v2' if generate_cu_trtllm else f'const {params_type}'
@@ -3561,27 +3579,33 @@ def generate_files(specs_names):
     with open('./generated/print_kernel_traits.cu', 'w') as f:
         f.write(print_kernel_traits_code)
 
-    # Make sure we have a bin directory.
-    if not os.path.exists('bin'):
-        os.mkdir('bin')
-    cmd = 'nvcc -I src -Xcompiler -Wno-enum-compare --std=c++17 -o bin/print_traits.exe generated/print_kernel_traits.cu'.split(
-    )
-    if 'CUDA_PATH' in os.environ:
-        cmd[0] = os.environ['CUDA_PATH'] + '/bin/' + cmd[0]
-    print('Running command "{}" to build "bin/print_traits.exe":'.format(
-        ' '.join(cmd)))
-    process = subprocess.Popen(cmd,
-                               stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE)
-    output, error = process.communicate()
-    print('Running "bin/print_traits.exe":')
-    process = subprocess.Popen('bin/print_traits.exe',
-                               stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE)
-    output, error = process.communicate()
-    output = output.decode('utf-8').strip()
-    # this gives: kname, smem bytes, threads_per_cta, loop_step
-    kernel_traits = [traits.split() for traits in output.splitlines()]
+    # Skip executable compilation if requested
+    if "SKIP_PRINT_TRAITS" in os.environ:
+        print("Skipping print_traits.exe compilation and execution")
+        # Create minimal cubin header without runtime traits
+        kernel_traits = []
+    else:
+        # Make sure we have a bin directory.
+        if not os.path.exists("bin"):
+            os.mkdir("bin")
+        cmd = "nvcc -I src -Xcompiler -Wno-enum-compare --std=c++17 -o bin/print_traits.exe generated/print_kernel_traits.cu".split()
+        if "CUDA_PATH" in os.environ:
+            cmd[0] = os.environ["CUDA_PATH"] + "/bin/" + cmd[0]
+        print(
+            'Running command "{}" to build "bin/print_traits.exe":'.format(
+                " ".join(cmd)
+            )
+        )
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        output, error = process.communicate()
+        print('Running "bin/print_traits.exe":')
+        process = subprocess.Popen(
+            "bin/print_traits.exe", stdin=subprocess.PIPE, stdout=subprocess.PIPE
+        )
+        output, error = process.communicate()
+        output = output.decode("utf-8").strip()
+        # this gives: kname, smem bytes, threads_per_cta, loop_step
+        kernel_traits = [traits.split() for traits in output.splitlines()]
     cubin_header = get_cubin_header(kernel_traits, valid_specs_names)
     if generate_cu_trtllm:
         cubin_header = modify_cubin_header(cubin_header)
