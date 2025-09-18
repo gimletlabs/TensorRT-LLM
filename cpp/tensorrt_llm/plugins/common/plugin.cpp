@@ -78,7 +78,9 @@ std::optional<T> PluginFieldParser::getScalar(std::string_view const& name)
     }
     auto& record = mMap.at(name);
     auto const& f = mFields[record.index];
-    TLLM_CHECK(toFieldType<T>() == f.type && f.length == 1);
+    TLLM_CHECK_WITH_INFO(toFieldType<T>() == f.type && f.length == 1,
+        "Field %s not correct type. expected %d received %d", name.data(), toFieldType<T>(), f.type);
+
     record.retrieved = true;
     return std::optional{*static_cast<T const*>(f.data)};
 }
