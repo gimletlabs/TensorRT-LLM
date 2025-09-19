@@ -18,6 +18,7 @@
 
 #include "tensorrt_llm/kernels/kvCacheUtils.h"
 #include "tmaDescriptor.h"
+#include <cstdio>
 #include <limits.h>
 #include <stdint.h>
 
@@ -293,6 +294,84 @@ struct MHARunnerParams
     int qMaxNBlock;
     int kMaxNBlock;
     int vMaxNBlock;
+
+    // Convert to string for debug.
+    std::string convertToStrOutput() const
+    {
+        std::string output = "b = " + std::to_string(b);
+        output += ", numGroupedHeads = " + std::to_string(numGroupedHeads);
+        output += ", qSeqLen = " + std::to_string(qSeqLen);
+        output += ", kvSeqLen = " + std::to_string(kvSeqLen);
+        output += ", slidingWindowSize = " + std::to_string(slidingWindowSize);
+        output += ", chunkedAttentionSize = " + std::to_string(chunkedAttentionSize);
+        output += ", totalQSeqLen = " + std::to_string(totalQSeqLen);
+        output += ", totalKvSeqLen = " + std::to_string(totalKvSeqLen);
+
+        char ptrBuf[32];
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", qkvPtr);
+        output += ", qkvPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", qPtr);
+        output += ", qPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", kvPtr);
+        output += ", kvPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", outputPtr);
+        output += ", outputPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", outputSfPtr);
+        output += ", outputSfPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", softmaxStatsPtr);
+        output += ", softmaxStatsPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", packedMaskPtr);
+        output += ", packedMaskPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", cuQSeqLenPtr);
+        output += ", cuQSeqLenPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", kvSeqLenPtr);
+        output += ", kvSeqLenPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", cuKvSeqLenPtr);
+        output += ", cuKvSeqLenPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", cuMaskRowsPtr);
+        output += ", cuMaskRowsPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", tileCounterPtr);
+        output += ", tileCounterPtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", scaleBmm1Ptr);
+        output += ", scaleBmm1Ptr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", scaleBmm2Ptr);
+        output += ", scaleBmm2Ptr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", oSfScalePtr);
+        output += ", oSfScalePtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", (void*) stream);
+        output += ", stream = " + std::string(ptrBuf);
+        output += ", forceFp32Acc = " + std::string(forceFp32Acc ? "true" : "false");
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", qScalePtr);
+        output += ", qScalePtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", kScalePtr);
+        output += ", kScalePtr = " + std::string(ptrBuf);
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", vScalePtr);
+        output += ", vScalePtr = " + std::string(ptrBuf);
+        output += ", qMaxNBlock = " + std::to_string(qMaxNBlock);
+        output += ", kMaxNBlock = " + std::to_string(kMaxNBlock);
+        output += ", vMaxNBlock = " + std::to_string(vMaxNBlock);
+
+        return output;
+    }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -437,6 +516,98 @@ struct Fused_multihead_attention_params_v2
     // Separate TMA descriptor for V when d != dv in packed qkv input layout, e.g. MLA + 192/128 dims
     // We need to add this parameter in the tail of the struct for cubin compatibility
     cudaTmaDesc tma_desc_v;
+
+    // Convert to string for debug.
+    std::string toString() const
+    {
+        char ptrBuf[32];
+        std::string output;
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", qkv_ptr);
+        output += "qkv_ptr = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", q_ptr);
+        output += "q_ptr = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", kv_ptr);
+        output += "kv_ptr = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", packed_mask_ptr);
+        output += "packed_mask_ptr = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", o_ptr);
+        output += "o_ptr = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", softmax_stats_ptr);
+        output += "softmax_stats_ptr = " + std::string(ptrBuf) + "\n";
+
+        output += "qkv_stride_in_bytes = " + std::to_string(qkv_stride_in_bytes) + "\n";
+        output += "q_stride_in_bytes = " + std::to_string(q_stride_in_bytes) + "\n";
+        output += "kv_stride_in_bytes = " + std::to_string(kv_stride_in_bytes) + "\n";
+        output += "v_stride_in_bytes = " + std::to_string(v_stride_in_bytes) + "\n";
+        output += "packed_mask_stride_in_bytes = " + std::to_string(packed_mask_stride_in_bytes) + "\n";
+        output += "o_stride_in_bytes = " + std::to_string(o_stride_in_bytes) + "\n";
+        output += "softmax_stats_stride_in_bytes = " + std::to_string(softmax_stats_stride_in_bytes) + "\n";
+
+        output += "blocks_per_tma_load = " + std::to_string(blocks_per_tma_load) + "\n";
+        output += "blocks_per_tma_load_log2 = " + std::to_string(blocks_per_tma_load_log2) + "\n";
+
+        output += "b = " + std::to_string(b) + "\n";
+        output += "h = " + std::to_string(h) + "\n";
+        output += "h_kv = " + std::to_string(h_kv) + "\n";
+        output += "h_q_per_kv = " + std::to_string(h_q_per_kv) + "\n";
+        output += "s = " + std::to_string(s) + "\n";
+        output += "d = " + std::to_string(d) + "\n";
+        output += "dv = " + std::to_string(dv) + "\n";
+        output += "num_grouped_heads = " + std::to_string(num_grouped_heads) + "\n";
+        output += "sliding_window_size = " + std::to_string(sliding_window_size) + "\n";
+        output += "log2_chunked_attention_size = " + std::to_string(log2_chunked_attention_size) + "\n";
+
+        output += "scale_bmm1 = " + std::to_string(scale_bmm1) + "\n";
+        output += "softcapping_scale_bmm1 = " + std::to_string(softcapping_scale_bmm1) + "\n";
+        output += "scale_softmax = " + std::to_string(scale_softmax) + "\n";
+        output += "scale_bmm2 = " + std::to_string(scale_bmm2) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", scale_bmm1_d);
+        output += "scale_bmm1_d = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", scale_bmm2_d);
+        output += "scale_bmm2_d = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", cu_q_seqlens);
+        output += "cu_q_seqlens = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", cu_kv_seqlens);
+        output += "cu_kv_seqlens = " + std::string(ptrBuf) + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", cu_mask_rows);
+        output += "cu_mask_rows = " + std::string(ptrBuf) + "\n";
+
+        output += "has_alibi = " + std::string(has_alibi ? "true" : "false") + "\n";
+
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", tile_id_counter_ptr);
+        output += "tile_id_counter_ptr = " + std::string(ptrBuf) + "\n";
+
+        output += "num_tiles = " + std::to_string(num_tiles) + "\n";
+        output += "num_tiles_per_head = " + std::to_string(num_tiles_per_head) + "\n";
+        output += "use_balanced_scheduling = " + std::string(use_balanced_scheduling ? "true" : "false") + "\n";
+        output += "is_s_padded = " + std::string(is_s_padded ? "true" : "false") + "\n";
+
+        // SageAttention parameters
+        output += "sage.q.max_nblock = " + std::to_string(sage.q.max_nblock) + "\n";
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", sage.q.scales);
+        output += "sage.q.scales = " + std::string(ptrBuf) + "\n";
+
+        output += "sage.k.max_nblock = " + std::to_string(sage.k.max_nblock) + "\n";
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", sage.k.scales);
+        output += "sage.k.scales = " + std::string(ptrBuf) + "\n";
+
+        output += "sage.v.max_nblock = " + std::to_string(sage.v.max_nblock) + "\n";
+        snprintf(ptrBuf, sizeof(ptrBuf), "%p", sage.v.scales);
+        output += "sage.v.scales = " + std::string(ptrBuf);
+
+        return output;
+    }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -495,6 +666,60 @@ struct Launch_params
     int sage_block_size_v = 0;
     // if we use a kernel that supports returning softmax statistics
     bool supportReturnSoftmaxStats;
+
+    // Convert to string for debug.
+    std::string toString() const
+    {
+        std::string output;
+
+        output += "kernel_s = " + std::to_string(kernel_s) + "\n";
+        output += "total_q_seqlen = " + std::to_string(total_q_seqlen) + "\n";
+        output += "total_kv_seqlen = " + std::to_string(total_kv_seqlen) + "\n";
+        output += "padded_d = " + std::to_string(padded_d) + "\n";
+        output += "ignore_b1opt = " + std::string(ignore_b1opt ? "true" : "false") + "\n";
+        output += "force_unroll = " + std::string(force_unroll ? "true" : "false") + "\n";
+        output += "force_fp32_acc = " + std::string(force_fp32_acc ? "true" : "false") + "\n";
+        output += "interleaved = " + std::string(interleaved ? "true" : "false") + "\n";
+        output += "use_tma = " + std::string(use_tma ? "true" : "false") + "\n";
+        output += "flash_attention = " + std::string(flash_attention ? "true" : "false") + "\n";
+        output += "warp_specialization = " + std::string(warp_specialization ? "true" : "false") + "\n";
+        output += "granular_tiling = " + std::string(granular_tiling ? "true" : "false") + "\n";
+        output += "dynamic_scheduler = " + std::string(dynamic_scheduler ? "true" : "false") + "\n";
+
+        output += "attention_mask_type = ";
+        switch (attention_mask_type)
+        {
+        case ContextAttentionMaskType::PADDING: output += "padding"; break;
+        case ContextAttentionMaskType::CAUSAL: output += "causal"; break;
+        case ContextAttentionMaskType::SLIDING_OR_CHUNKED_CAUSAL: output += "sliding_or_chunked_causal"; break;
+        case ContextAttentionMaskType::CUSTOM_MASK: output += "custom_mask"; break;
+        default: output += std::to_string(static_cast<int>(attention_mask_type)) + " (unknown)"; break;
+        }
+        output += "\n";
+
+        output += "attention_input_layout = ";
+        switch (attention_input_layout)
+        {
+        case AttentionInputLayout::PACKED_QKV: output += "packed_qkv"; break;
+        case AttentionInputLayout::Q_CONTIGUOUS_KV: output += "q_contiguous_kv"; break;
+        case AttentionInputLayout::Q_PAGED_KV: output += "q_paged_kv"; break;
+        default: output += std::to_string(static_cast<int>(attention_input_layout)) + " (unknown)"; break;
+        }
+        output += "\n";
+
+        output += "useKernelWithoutAlibi = " + std::string(useKernelWithoutAlibi ? "true" : "false") + "\n";
+        output += "useBase2ExpTrick = " + std::string(useBase2ExpTrick ? "true" : "false") + "\n";
+        output += "enableAttnLogitSoftcapping = " + std::string(enableAttnLogitSoftcapping ? "true" : "false") + "\n";
+        output += "multi_processor_count = " + std::to_string(multi_processor_count) + "\n";
+        output += "device_l2_cache_size = " + std::to_string(device_l2_cache_size) + "\n";
+        output += "total_device_memory = " + std::to_string(total_device_memory) + "\n";
+        output += "sage_block_size_q = " + std::to_string(sage_block_size_q) + "\n";
+        output += "sage_block_size_k = " + std::to_string(sage_block_size_k) + "\n";
+        output += "sage_block_size_v = " + std::to_string(sage_block_size_v) + "\n";
+        output += "supportReturnSoftmaxStats = " + std::string(supportReturnSoftmaxStats ? "true" : "false");
+
+        return output;
+    }
 };
 
 } // namespace kernels

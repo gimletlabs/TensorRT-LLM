@@ -130,7 +130,7 @@ void FmhaDispatcher::run(MHARunnerParams runnerParams)
 {
     if (mUseTllmGen)
     {
-        TLLM_LOG_DEBUG("Running TRTLLM-GEN context FMHA kernel.");
+        TLLM_LOG_INFO("Running TRTLLM-GEN context FMHA kernel.");
         TLLM_CHECK_WITH_INFO(mTllmGenFMHARunner.get(), "mTllmGenFMHARunner not initialized.");
         // Convert from MHAFixedParams + MHARunnerParams to TllmGenFmhaRunnerParams
         void const* kvPoolPtr = nullptr;
@@ -202,6 +202,7 @@ void FmhaDispatcher::run(MHARunnerParams runnerParams)
     }
     else
     {
+        TLLM_LOG_INFO("Running unfused MHA kernel.");
         mFMHARunner->run(runnerParams);
     }
 }

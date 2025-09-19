@@ -116,6 +116,7 @@ void TFusedMultiHeadAttentionXMMAKernel<TKernelMeta, TKernelParam>::run(
     auto const findIter = mFunctions.find(hashID(params.s, params.d));
 
     auto const& kernelMeta = mKernelMeta[findIter->second.mMetaInfoIndex];
+    TLLM_LOG_INFO("Selected kernel: %s", kernelMeta.mFuncName);
     const CUfunction func = findIter->second.mDeviceFunction;
 
     void* kernelParams[] = {&params, nullptr};
@@ -129,6 +130,7 @@ TFusedMHAKernelList const* TFusedMHAKernelFactory<TFusedMHAKernelList>::getXMMAK
     const typename TFusedMHAKernelList::KernelMeta* pKernelList, unsigned int nbKernels, Data_type inputType,
     Data_type outputType, unsigned int sm)
 {
+    TLLM_LOG_INFO("Getting XMMA kernels for inputType=%d, outputType=%d, sm=%d", inputType, outputType, sm);
     static std::mutex s_mutex;
     std::lock_guard<std::mutex> lg(s_mutex);
 
@@ -137,7 +139,7 @@ TFusedMHAKernelList const* TFusedMHAKernelFactory<TFusedMHAKernelList>::getXMMAK
     if (findIter == mKernels.end())
     {
         TFusedMHAKernelList* newKernel = new TFusedMHAKernelList{pKernelList, nbKernels, inputType, outputType, sm};
-        // printf("Loading kernels for inputType=%d, outputType=%d, sm=%d\n", inputType, outputType, sm);
+        TLLM_LOG_INFO("Loading kernels for inputType=%d, outputType=%d, sm=%d", inputType, outputType, sm);
         newKernel->loadXMMAKernels();
         mKernels.insert(std::make_pair(id, std::unique_ptr<TFusedMHAKernelList>(newKernel)));
         return newKernel;
@@ -225,8 +227,15 @@ uint64_t FusedMultiHeadAttentionXMMAKernelV2::hashID(KernelMeta const& kernelMet
 void FusedMultiHeadAttentionXMMAKernelV2::run(
     Fused_multihead_attention_params_v2& params, Launch_params& launch_params, cudaStream_t stream) const
 {
+    TLLM_LOG_INFO("Running FMHA kernel with params: %s", params.toString().c_str());
     bool forceUnroll = useForceUnroll(params, launch_params);
     auto const findIter = mFunctions.find(hashFromParams(params, launch_params));
+
+    if (findIter != mFunctions.end())
+    {
+        auto const& meta = mKernelMeta[findIter->second.mMetaInfoIndex];
+        TLLM_LOG_INFO("Selected kernel: %s", meta.mFuncName);
+    }
 
     // Add debug info when kernels are not found.
     if (findIter == mFunctions.end())
@@ -278,19 +287,59 @@ void FusedMultiHeadAttentionXMMAKernelV2::run(
     }
 
     auto const& kernelMeta = mKernelMeta[findIter->second.mMetaInfoIndex];
+
+    // Debug: Log selected kernel details
+    TLLM_LOG_INFO("=== KERNEL LAUNCH DEBUG ===");
+    TLLM_LOG_INFO("Selected kernel: %s", kernelMeta.mFuncName);
+    TLLM_LOG_INFO("Kernel metadata - S:%d D:%d DV:%d ThreadsPerCTA:%d SharedMem:%d", kernelMeta.mS, kernelMeta.mD,
+        kernelMeta.mDV, kernelMeta.mThreadsPerCTA, kernelMeta.mSharedMemBytes);
+    TLLM_LOG_INFO("Launch params hash: 0x%lx", hashFromParams(params, launch_params));
+
+    // Debug: Memory pointer validation
+    TLLM_LOG_INFO("Memory pointers check:");
+    TLLM_LOG_INFO("  qkv_ptr: %p, q_ptr: %p, kv_ptr: %p", params.qkv_ptr, params.q_ptr, params.kv_ptr);
+    TLLM_LOG_INFO("  o_ptr: %p, packed_mask_ptr: %p", params.o_ptr, params.packed_mask_ptr);
+
+    // Temporariy disabled.
     if (kernelMeta.launcher != nullptr)
     {
+        TLLM_LOG_INFO("Using function launcher for kernel: %s", kernelMeta.mFuncName);
         kernelMeta.launcher(params, launch_params, stream);
+
+        // Debug: Check for errors after launcher
+        cudaError_t error = cudaGetLastError();
+        if (error != cudaSuccess)
+        {
+            TLLM_LOG_ERROR("CUDA error after launcher: %s", cudaGetErrorString(error));
+        }
+        TLLM_LOG_INFO("Launcher completed successfully");
         return;
     }
     const CUfunction func = findIter->second.mDeviceFunction;
 
     void* kernelParams[] = {&params, nullptr};
 
+    // Debug: Log kernel parameters pointer
+    TLLM_LOG_INFO("Kernel params array: kernelParams[0]=%p", kernelParams[0]);
+
     if (!forceUnroll)
     {
+        TLLM_LOG_INFO("Launching kernel (no unroll): grid=(%d,%d,%d) block=(%d,%d,%d) sharedMem=%d", params.h, params.b,
+            1, kernelMeta.mThreadsPerCTA, 1, 1, kernelMeta.mSharedMemBytes);
         TLLM_CU_CHECK(mDriver->cuLaunchKernel(func, params.h, params.b, 1, kernelMeta.mThreadsPerCTA, 1, 1,
             kernelMeta.mSharedMemBytes, stream, kernelParams, nullptr));
+
+        // Debug: Synchronize and check for errors
+        TLLM_LOG_INFO("Kernel launched, checking for errors...");
+        cudaError_t error = cudaStreamSynchronize(stream);
+        if (error != cudaSuccess)
+        {
+            TLLM_LOG_ERROR("CUDA error after kernel execution: %s", cudaGetErrorString(error));
+        }
+        else
+        {
+            TLLM_LOG_INFO("Kernel completed successfully (no unroll path)");
+        }
     } // forceunroll = true for flash attention kernels
     else if (mSM == kSM_90 && launch_params.flash_attention && launch_params.warp_specialization)
     {
@@ -349,8 +398,25 @@ void FusedMultiHeadAttentionXMMAKernelV2::run(
             }
         }
 
+        TLLM_LOG_INFO("Launching kernel (SM90 warp spec): grid=(%d,%d,%d) block=(%d,%d,%d) sharedMem=%d", block_size.x,
+            block_size.y, block_size.z, kernelMeta.mThreadsPerCTA, 1, 1, kernelMeta.mSharedMemBytes);
+        TLLM_LOG_INFO("Dynamic scheduler params: num_tiles=%d, num_tiles_per_head=%d, use_balanced=%s",
+            params.num_tiles, params.num_tiles_per_head, params.use_balanced_scheduling ? "true" : "false");
+
         TLLM_CU_CHECK(mDriver->cuLaunchKernel(func, block_size.x, block_size.y, block_size.z, kernelMeta.mThreadsPerCTA,
             1, 1, kernelMeta.mSharedMemBytes, stream, kernelParams, nullptr));
+
+        // Debug: Synchronize and check for errors
+        TLLM_LOG_INFO("Kernel launched, checking for errors...");
+        cudaError_t error = cudaStreamSynchronize(stream);
+        if (error != cudaSuccess)
+        {
+            TLLM_LOG_ERROR("CUDA error after kernel execution: %s", cudaGetErrorString(error));
+        }
+        else
+        {
+            TLLM_LOG_INFO("Kernel completed successfully (SM90 warp spec path)");
+        }
     }
     else
     { // forceunroll = true for flash attention kernels
@@ -362,11 +428,28 @@ void FusedMultiHeadAttentionXMMAKernelV2::run(
             unroll = (params.s + kernelMeta.mUnrollStep - 1) / kernelMeta.mUnrollStep;
         }
 
+        TLLM_LOG_INFO("Force unroll path: unroll=%d, flash_attention=%s", unroll,
+            launch_params.flash_attention ? "true" : "false");
+
         // on Hopper non-flash-attention, we still launch blocks (h, b, steps)
         if (mSM == kSM_90 && !launch_params.flash_attention)
         {
+            TLLM_LOG_INFO("Launching kernel (SM90 non-flash): grid=(%d,%d,%d) block=(%d,%d,%d) sharedMem=%d", params.h,
+                params.b, unroll, kernelMeta.mThreadsPerCTA, 1, 1, kernelMeta.mSharedMemBytes);
             TLLM_CU_CHECK(mDriver->cuLaunchKernel(func, params.h, params.b, unroll, kernelMeta.mThreadsPerCTA, 1, 1,
                 kernelMeta.mSharedMemBytes, stream, kernelParams, nullptr));
+
+            // Debug: Synchronize and check for errors
+            TLLM_LOG_INFO("Kernel launched, checking for errors...");
+            cudaError_t error = cudaStreamSynchronize(stream);
+            if (error != cudaSuccess)
+            {
+                TLLM_LOG_ERROR("CUDA error after kernel execution: %s", cudaGetErrorString(error));
+            }
+            else
+            {
+                TLLM_LOG_INFO("Kernel completed successfully (SM90 non-flash path)");
+            }
         } // on Ampere/Ada flash attention, we launch blocks (steps, h, b)
         else
         {
@@ -374,12 +457,31 @@ void FusedMultiHeadAttentionXMMAKernelV2::run(
             {
                 // A single CTA can handle a maximum of 256 dimensions of V.
                 // For cases exceeding 256 dimensions, the number of CTAs needs to be multiplied.
+                int original_unroll = unroll;
                 unroll *= (params.dv + 256 - 1) / 256;
+                TLLM_LOG_INFO(
+                    "Tiled kernel: original_unroll=%d, dv=%d, adjusted_unroll=%d", original_unroll, params.dv, unroll);
             }
+            TLLM_LOG_INFO("Launching kernel (Ampere/Ada flash): grid=(%d,%d,%d) block=(%d,%d,%d) sharedMem=%d", unroll,
+                params.h, params.b, kernelMeta.mThreadsPerCTA, 1, 1, kernelMeta.mSharedMemBytes);
             TLLM_CU_CHECK(mDriver->cuLaunchKernel(func, unroll, params.h, params.b, kernelMeta.mThreadsPerCTA, 1, 1,
                 kernelMeta.mSharedMemBytes, stream, kernelParams, nullptr));
+
+            // Debug: Synchronize and check for errors
+            TLLM_LOG_INFO("Kernel launched, checking for errors...");
+            cudaError_t error = cudaStreamSynchronize(stream);
+            if (error != cudaSuccess)
+            {
+                TLLM_LOG_ERROR("CUDA error after kernel execution: %s", cudaGetErrorString(error));
+            }
+            else
+            {
+                TLLM_LOG_INFO("Kernel completed successfully (Ampere/Ada flash path)");
+            }
         }
     }
+
+    TLLM_LOG_INFO("=== KERNEL LAUNCH DEBUG END ===");
 }
 
 bool FusedMultiHeadAttentionXMMAKernelV2::checkIfKernelExist(MHARunnerFixedParams params) const

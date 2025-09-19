@@ -18,6 +18,7 @@
 #include "gptAttentionPlugin.h"
 
 #include "tensorrt_llm/batch_manager/contextProgress.h"
+#include "tensorrt_llm/common/cudaUtils.h"
 #include "tensorrt_llm/common/logger.h"
 #include "tensorrt_llm/kernels/decoderMaskedMultiheadAttention.h"
 #include "tensorrt_llm/kernels/gptKernels.h"
@@ -36,6 +37,16 @@
 #include <functional>
 #include <numeric>
 
+// Macro for null pointer checks
+#define CHECK_NOT_NULL(p)                                                                                              \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (!(p))                                                                                                      \
+        {                                                                                                              \
+            return -1;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
+
 using namespace nvinfer1;
 using namespace tensorrt_llm::kernels;
 using namespace tensorrt_llm::common;
@@ -53,9 +64,9 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
     float rotary_embedding_scale, float rotary_embedding_short_m_scale,
     float rotary_embedding_long_m_scale, // magnitude scaling factors for Phi-3 long RoPE
     int rotary_embedding_max_positions, int rotary_embedding_original_max_positions, int tp_size,
-    int tp_rank,                         // for ALiBi
-    bool unfuse_qkv_gemm,                // for AutoPP
-    bool use_logn_scaling,               // for LognScaling
+    int tp_rank,           // for ALiBi
+    bool unfuse_qkv_gemm,  // for AutoPP
+    bool use_logn_scaling, // for LognScaling
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
     tensorrt_llm::kernels::AttentionMaskType mask_type, tensorrt_llm::kernels::BlockSparseParams block_sparse_params,
     bool paged_kv_cache, int tokens_per_block, nvinfer1::DataType type, int32_t max_context_length,
@@ -216,6 +227,19 @@ GPTAttentionPlugin::IndexType GPTAttentionPlugin::getIdx(IdxEntry const& entry) 
     TLLM_CHECK_WITH_INFO(
         isEntryUsed(entry), common::fmtstr("getIdx() should not be used with entry %s.\n", toString(entry).data()));
     return mEntryIdx[static_cast<size_t>(entry)];
+}
+
+int GPTAttentionPlugin::getNbInputs() const
+{
+    int count = 0;
+    for (size_t i = 0; i < static_cast<size_t>(IdxEntry::ENUM_SIZE); i++)
+    {
+        if (isEntryUsed(static_cast<IdxEntry>(i)))
+        {
+            count++;
+        }
+    }
+    return count;
 }
 
 // IPluginV2DynamicExt Methods
@@ -607,7 +631,7 @@ int GPTAttentionPlugin::enqueueImpl(nvinfer1::PluginTensorDesc const* inputDesc,
     nvinfer1::PluginTensorDesc const* outputDesc, void const* const* inputs, void* const* outputs, void* workspace,
     cudaStream_t stream)
 {
-    TLLM_LOG_TRACE("Attention plugin start at layer %d", mLayerIdx);
+    TLLM_LOG_INFO("Attention plugin start at layer %d", mLayerIdx);
 
     using runtime::RequestType;
 
@@ -669,9 +693,22 @@ int GPTAttentionPlugin::enqueueImpl(nvinfer1::PluginTensorDesc const* inputDesc,
     }
 
     sync_check_cuda_error(stream);
-    TLLM_LOG_TRACE("Attention plugin stop at layer %d", mLayerIdx);
+    TLLM_LOG_INFO("Attention plugin stop at layer %d", mLayerIdx);
 
     return 0;
+}
+
+void logPluginTensorShape(std::string const& name, nvinfer1::PluginTensorDesc const inputDesc)
+{
+    std::string shapeStr = "";
+    for (int i = 0; i < inputDesc.dims.nbDims; i++)
+    {
+        if (i > 0)
+            shapeStr += ", ";
+        shapeStr += std::to_string(inputDesc.dims.d[i]);
+    }
+    TLLM_LOG_INFO(
+        "%s tensor shapes: [%s] type: %d format: %d", name.c_str(), shapeStr.c_str(), inputDesc.type, inputDesc.format);
 }
 
 template <typename T, typename AttentionOutT, typename KVCacheBuffer>
@@ -679,6 +716,10 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     nvinfer1::PluginTensorDesc const* inputDesc, nvinfer1::PluginTensorDesc const* outputDesc,
     void const* const* inputs, void* const* outputs, void* workspace, cudaStream_t stream)
 {
+    TLLM_LOG_INFO("Entering enqueueSome: seqIdxBeg=%d, localNbSeq=%d, tokenIdxBeg=%d, localNbTokens=%d", seqIdxBeg,
+        localNbSeq, tokenIdxBeg, localNbTokens);
+    TLLM_LOG_INFO("Input pointers: inputDesc=%p, outputDesc=%p, inputs=%p, outputs=%p, workspace=%p, stream=%p",
+        inputDesc, outputDesc, inputs, outputs, workspace, stream);
     //     relative_attention_bias [head_num, max_seq_len, max_seq_len] (optional in relative position)
     //                          or [head_num, num_buckets] (optional in implicit relative attention)
     //     cross_kv [batch_size, seq_len, 2 * local_hidden_size] or [num_tokens, 2 * local_hidden_size]
@@ -688,34 +729,51 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
 
     using runtime::RequestType;
 
+    TLLM_LOG_INFO("Getting request type pointer and checking context mode");
+    TLLM_LOG_INFO("REQUEST_TYPES input pointer: %p", inputs[getIdx(IdxEntry::REQUEST_TYPES)]);
     auto const* const reqTypeInBatchPtr
         = static_cast<RequestType const*>(inputs[getIdx(IdxEntry::REQUEST_TYPES)]) + seqIdxBeg;
+    TLLM_LOG_INFO("reqTypeInBatchPtr: %p", reqTypeInBatchPtr);
     bool const is_context = (reqTypeInBatchPtr[0] == RequestType::kCONTEXT);
+    TLLM_LOG_INFO("Request type determined: is_context=%d", is_context);
 
+    TLLM_LOG_INFO("Setting up attention input pointer from QKV tensor");
+    TLLM_LOG_INFO("QKV_TENSOR input pointer: %p", inputs[getIdx(IdxEntry::QKV_TENSOR)]);
     T const* attention_input = static_cast<T const*>(inputs[getIdx(IdxEntry::QKV_TENSOR)])
         + inputDesc[getIdx(IdxEntry::QKV_TENSOR)].dims.d[getPackedTensorHiddenDimIndex(mRemovePadding)]
             * size_t(tokenIdxBeg);
+    TLLM_LOG_INFO("attention_input calculated: %p", attention_input);
+    TLLM_LOG_INFO("Attention input pointer set, checking spec decoding");
 
     bool changeSpecDecodingMode = false;
     if (mIsSpecDecodingEnabled)
     {
+        TLLM_LOG_INFO("Spec decoding enabled, retrieving use flag");
+        TLLM_LOG_INFO("SPEC_DECODING_USE input pointer: %p", inputs[getIdx(IdxEntry::SPEC_DECODING_USE)]);
         bool useSpecDecoding
             = static_cast<bool>(reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::SPEC_DECODING_USE)])[0]);
         changeSpecDecodingMode = mUseSpecDecoding != useSpecDecoding;
         mUseSpecDecoding = useSpecDecoding;
         // change mMultiBlockMode to default
         mMultiBlockMode = mUseSpecDecoding ? false : true;
+        TLLM_LOG_INFO("Spec decoding setup complete: useSpecDecoding=%d, changeSpecDecodingMode=%d", useSpecDecoding,
+            changeSpecDecodingMode);
     }
 
     [[maybe_unused]] MlaParams<T> mla_params;
 
+    TLLM_LOG_INFO("Setting up QKV bias (enabled=%d)", mQKVBiasEnabled);
     T const* qkv_bias = nullptr;
     if (mQKVBiasEnabled)
     {
+        TLLM_LOG_INFO("QKV_BIAS_TENSOR input pointer: %p", inputs[getIdx(IdxEntry::QKV_BIAS_TENSOR)]);
         qkv_bias = reinterpret_cast<T const*>(inputs[getIdx(IdxEntry::QKV_BIAS_TENSOR)]);
+        TLLM_LOG_INFO("qkv_bias: %p", qkv_bias);
     }
+    TLLM_LOG_INFO("QKV bias setup complete");
 
     // Note we still need context length during generation for MMHA optimization.
+    TLLM_LOG_INFO("Computing max context Q length (removePadding=%d)", mRemovePadding);
     int32_t const max_context_q_len = [&]()
     {
         if (!mRemovePadding)
@@ -726,8 +784,10 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
             = static_cast<int32_t const*>(inputs[getIdx(IdxEntry::HOST_CONTEXT_LENGTH)]) + seqIdxBeg;
         return *std::max_element(host_context_lengths, host_context_lengths + localNbSeq);
     }();
+    TLLM_LOG_INFO("Max context Q length computed: %d", max_context_q_len);
 
     // Rotary inv_freq, cos_sin cache to avoid re-computing.
+    TLLM_LOG_INFO("Setting up rotary embeddings (isRoPE=%d)", isRoPE());
     float const* rotary_inv_freq = nullptr;
     float2 const* rotary_cos_sin = nullptr;
 
@@ -742,17 +802,23 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         auto inputName = useLongRoPECache ? IdxEntry::LONG_ROPE_ROTARY_COS_SIN : IdxEntry::ROTARY_COS_SIN;
         rotary_cos_sin = reinterpret_cast<float2 const*>(inputs[getIdx(inputName)]);
     }
+    TLLM_LOG_INFO("Rotary embeddings setup complete (useLongRoPECache=%d)", useLongRoPECache);
 
     auto const mrope_rotary_cos_sin
         = isMRoPE() ? reinterpret_cast<float2 const*>(inputs[getIdx(IdxEntry::MROPE_ROTARY_COS_SIN)]) : nullptr;
 
+    TLLM_LOG_INFO("isMRoPE=%s mrope_rotary_cos_sin=%p", isMRoPE() ? "true" : "false", mrope_rotary_cos_sin);
+
     auto const mrope_position_deltas
         = isMRoPE() ? reinterpret_cast<int32_t const*>(inputs[getIdx(IdxEntry::MROPE_POSITION_DELTAS)]) : nullptr;
 
+    TLLM_LOG_INFO("Checking unfuse QKV GEMM (enabled=%d)", mUnfuseQkvGemm);
     if (mUnfuseQkvGemm)
     {
+        TLLM_LOG_INFO("Starting unfuse QKV GEMM operations");
         int const max_seqlen = inputDesc[getIdx(IdxEntry::QKV_TENSOR)].dims.d[mRemovePadding ? 0 : 1];
         int const batch_size = mRemovePadding ? 1 : inputDesc[getIdx(IdxEntry::QKV_TENSOR)].dims.d[0];
+        TLLM_LOG_INFO("QKV dimensions: max_seqlen=%d, batch_size=%d", max_seqlen, batch_size);
 
         T const* attention_input_q = static_cast<T const*>(inputs[getIdx(IdxEntry::QKV_TENSOR)]);
         T const* attention_input_k = static_cast<T const*>(inputs[getIdx(IdxEntry::K_TENSOR)]);
@@ -766,10 +832,14 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         size_t const size_q = sizeof(T) * hidden_units_q;
         size_t const size_kv = sizeof(T) * hidden_units_kv;
         size_t const total_size = size_qkv * batch_size * max_seqlen;
+        TLLM_LOG_INFO("Memory sizes: hidden_units_q=%zu, hidden_units_kv=%zu, total_size=%zu", hidden_units_q,
+            hidden_units_kv, total_size);
+
         int8_t* workspace_byte_ptr = reinterpret_cast<int8_t*>(workspace);
         size_t offset = 0;
         T* attention_input_qkv = reinterpret_cast<T*>(nextWorkspacePtr(workspace_byte_ptr, offset, total_size));
         workspace = reinterpret_cast<void*>(workspace_byte_ptr + offset);
+        TLLM_LOG_INFO("Workspace allocated, starting memory copies");
 
         cudaMemcpy2DAsync(attention_input_qkv, size_qkv, attention_input_q, size_q, size_q, batch_size * max_seqlen,
             cudaMemcpyDeviceToDevice, stream);
@@ -779,12 +849,15 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
             size_kv, batch_size * max_seqlen, cudaMemcpyDeviceToDevice, stream);
 
         attention_input = attention_input_qkv + hidden_units * tokenIdxBeg;
+        TLLM_LOG_INFO("Unfuse QKV GEMM operations complete");
     }
 
+    TLLM_LOG_INFO("Getting sequence lengths (useKVCache=%d)", useKVCache());
     int const* context_q_lengths = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::CONTEXT_LENGTHS)]) + seqIdxBeg;
     int const* sequence_kv_length = useKVCache()
         ? static_cast<int const*>(inputs[getIdx(IdxEntry::SEQUENCE_LENGTH)]) + seqIdxBeg
         : context_q_lengths;
+    TLLM_LOG_INFO("Sequence lengths extracted");
 
     int max_encoder_context_len = isCrossAttention() ? inputDesc[getIdx(IdxEntry::CROSS_KV_LENGTH)].dims.d[0] : 0;
     // for enc-dec model, since decoder_input_ids could be longer than 1,
@@ -795,6 +868,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     // -- max_seq_len: max allowed len of decoder output, i.e. final results
     // -- max_encoder_context_len: len of encoder input (in cross attn). Also called encoder_input_seq_length
 
+    TLLM_LOG_INFO("Computing beam width and attention window sizes");
     int const beamWidth
         = isCrossAttention() ? 1 : (useKVCache() ? inputDesc[getIdx(IdxEntry::CACHE_INDIR)].dims.d[1] : 1);
 
@@ -809,14 +883,19 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     int const* cyclic_attention_window_sizes
         = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::HOST_MAX_ATTENTION_WINDOW)]);
     int const cyclic_attention_window_size
-        = isCrossAttention() ? max_encoder_context_len : cyclic_attention_window_sizes[mLayerIdx];
+        // TODO(philkuz) this is a hack.
+        = isCrossAttention() ? max_encoder_context_len : cyclic_attention_window_sizes[0];
     int const sink_token_length = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::HOST_SINK_TOKEN_LENGTH)])[0];
     int const num_attn_layer = inputDesc[getIdx(IdxEntry::HOST_MAX_ATTENTION_WINDOW)].dims.d[0];
     int const max_cyclic_attention_window_size = isCrossAttention()
         ? max_encoder_context_len
         : *std::max_element(cyclic_attention_window_sizes, cyclic_attention_window_sizes + num_attn_layer);
     bool const can_use_one_more_block = beamWidth > 1;
+    TLLM_LOG_INFO("Attention parameters: beamWidth=%d, max_attention_window_size=%d, cyclic_attention_window_size=%d",
+        beamWidth, max_attention_window_size, cyclic_attention_window_size);
 
+    TLLM_LOG_INFO(
+        "Setting up KV cache quantization (hasKvCacheQuant=%d)", useKVCache() && mKVCacheQuantMode.hasKvCacheQuant());
     float const* kv_scale_orig_quant = nullptr;
     float const* kv_scale_quant_orig = nullptr;
     if (useKVCache() && mKVCacheQuantMode.hasKvCacheQuant())
@@ -826,6 +905,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         kv_scale_orig_quant = reinterpret_cast<float const*>(inputs[getIdx(IdxEntry::KV_CACHE_QUANTIZATION_SCALE)]);
         kv_scale_quant_orig = reinterpret_cast<float const*>(inputs[getIdx(IdxEntry::KV_CACHE_DEQUANTIZATION_SCALE)]);
     }
+    TLLM_LOG_INFO("KV cache quantization setup complete");
 
     float const* attention_output_orig_quant = nullptr;
     if (mFP8ContextFMHA)
@@ -860,17 +940,24 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     kernels::KVBlockArray::DataType* host_block_offsets = nullptr;
     void* host_primary_pool_pointer = nullptr;
     void* host_secondary_pool_pointer = nullptr;
+    TLLM_LOG_INFO("Setting up KV cache pointers (useKVCache=%d, mPagedKVCache=%d)", useKVCache(), mPagedKVCache);
     if (useKVCache() && mPagedKVCache)
     {
+        TLLM_LOG_INFO("Paged KV cache enabled, setting up block offsets and pool pointers");
         auto const& kvCacheBlockOffsetsShape = inputDesc[getIdx(IdxEntry::KV_CACHE_BLOCK_OFFSETS)].dims;
         max_blocks_per_sequence = kvCacheBlockOffsetsShape.d[kvCacheBlockOffsetsShape.nbDims - 1];
+
+        logPluginTensorShape("KV_CACHE_BLOCK_OFFSETS", inputDesc[getIdx(IdxEntry::KV_CACHE_BLOCK_OFFSETS)]);
+        logPluginTensorShape("HOST_KV_CACHE_BLOCK_OFFSETS", inputDesc[getIdx(IdxEntry::HOST_KV_CACHE_BLOCK_OFFSETS)]);
+        logPluginTensorShape("HOST_KV_CACHE_POOL_MAPPING", inputDesc[getIdx(IdxEntry::HOST_KV_CACHE_POOL_MAPPING)]);
+        logPluginTensorShape("HOST_KV_CACHE_POOL_POINTERS", inputDesc[getIdx(IdxEntry::HOST_KV_CACHE_POOL_POINTERS)]);
 
         std::int32_t const* host_pool_mapping
             = static_cast<std::int32_t const*>(inputs[getIdx(IdxEntry::HOST_KV_CACHE_POOL_MAPPING)]);
 
         int32_t const layerToPool = host_pool_mapping[mLayerIdx * 2];
         int32_t const layerIdxInCachePool = host_pool_mapping[mLayerIdx * 2 + 1];
-        TLLM_LOG_TRACE("Layer%d: LayerCachePoolLocator{.indexOfPool=%d, .layerIdxInCachePool=%d}", mLayerIdx,
+        TLLM_LOG_INFO("Layer%d: LayerCachePoolLocator{.indexOfPool=%d, .layerIdxInCachePool=%d}", mLayerIdx,
             layerToPool, layerIdxInCachePool);
         auto const seqStride = getStride(kvCacheBlockOffsetsShape, 1);
         auto const poolStride = getStride(kvCacheBlockOffsetsShape, 0);
@@ -880,13 +967,17 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         block_offsets
             = reinterpret_cast<kernels::KVBlockArray::DataType*>(inputs[getIdx(IdxEntry::KV_CACHE_BLOCK_OFFSETS)])
             + poolOffset + seqOffset;
+        TLLM_LOG_INFO("Calculated block_offsets pointer: %p (poolOffset=%zu, seqOffset=%zu)", block_offsets, poolOffset,
+            seqOffset);
 
         host_block_offsets
             = reinterpret_cast<kernels::KVBlockArray::DataType*>(inputs[getIdx(IdxEntry::HOST_KV_CACHE_BLOCK_OFFSETS)])
             + poolOffset + seqOffset;
+        TLLM_LOG_INFO("Calculated host_block_offsets pointer: %p", host_block_offsets);
 
         auto const* const typed_host_pool_pointers
             = static_cast<char* const*>(inputs[getIdx(IdxEntry::HOST_KV_CACHE_POOL_POINTERS)]);
+        TLLM_LOG_INFO("typed_host_pool_pointers: %p", typed_host_pool_pointers);
 
         auto const cacheElemSize = (mKVCacheQuantMode.hasKvCacheQuant() ? 1 : sizeof(T));
 
@@ -894,14 +985,33 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         auto const blockSize = mTokensPerBlock * kv_cache_head_num * mHeadSize;
         auto const bytesPerBlock = blockSize * cacheElemSize;
         auto const layerOffset = layerIdxInCachePool * 2 * bytesPerBlock;
+        TLLM_LOG_INFO(
+            "KV cache calculations: cacheElemSize=%zu, kv_cache_head_num=%zu, blockSize=%zu, bytesPerBlock=%zu, "
+            "layerOffset=%zu",
+            cacheElemSize, kv_cache_head_num, blockSize, bytesPerBlock, layerOffset);
+
+        TLLM_LOG_INFO(
+            "Pool pointer array access: layerToPool*2=%d, layerToPool*2+1=%d", layerToPool * 2, layerToPool * 2 + 1);
+        TLLM_LOG_INFO("Raw pool pointers: primary_base=%p, secondary_base=%p",
+            typed_host_pool_pointers[layerToPool * 2], typed_host_pool_pointers[layerToPool * 2 + 1]);
 
         host_primary_pool_pointer = reinterpret_cast<void*>(typed_host_pool_pointers[layerToPool * 2] + layerOffset);
         host_secondary_pool_pointer
             = reinterpret_cast<void*>(typed_host_pool_pointers[layerToPool * 2 + 1] + layerOffset);
+
+        // Log pointer values for debugging (without accessing memory)
+        TLLM_LOG_INFO(
+            "KV cache pool analysis: primary=%p, secondary=%p", host_primary_pool_pointer, host_secondary_pool_pointer);
+        TLLM_LOG_INFO("Pointer difference: %ld bytes",
+            static_cast<char*>(host_secondary_pool_pointer) - static_cast<char*>(host_primary_pool_pointer));
+
+        TLLM_LOG_INFO("Final KV cache pool pointers: primary=%p, secondary=%p (layerOffset=%zu)",
+            host_primary_pool_pointer, host_secondary_pool_pointer, layerOffset);
     }
 
     // The index of kv cache tensor in outputs. If fuse FP4 quant, an additional scaling factor output is added before
     // the kv cache tensor.
+    TLLM_LOG_INFO("Setting up output buffers (fuseFp4Quant=%d)", mFuseFp4Quant);
     int const kvCacheIdxInOutputs = mFuseFp4Quant ? 2 : 1;
     // The number of elements per storage type. For FP4 output, storage type is uint8_t.
     int const numEltsPerStorageType = mFuseFp4Quant ? 2 : 1;
@@ -915,20 +1025,36 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         // The output address for FP4 scaling factor.
         context_buf_sf_ = static_cast<__nv_fp8_e4m3*>(outputs[1]);
     }
+    TLLM_LOG_INFO("Output buffers set: kvCacheIdxInOutputs=%d, numEltsPerStorageType=%d", kvCacheIdxInOutputs,
+        numEltsPerStorageType);
 
     void* key_value_cache = nullptr;
+    TLLM_LOG_INFO("Setting up key-value cache for non-paged mode (useKVCache && !mPagedKVCache = %d)",
+        useKVCache() && !mPagedKVCache);
     if (useKVCache() && !mPagedKVCache)
     {
+        TLLM_LOG_INFO("Linear KV cache mode - setting up key_value_cache pointer");
+        TLLM_LOG_INFO("outputs[%d] pointer: %p", kvCacheIdxInOutputs, outputs[kvCacheIdxInOutputs]);
+        TLLM_LOG_INFO("PAST_KEY_VALUE input pointer: %p", inputs[getIdx(IdxEntry::PAST_KEY_VALUE)]);
+
         auto const cacheElemSize = (mKVCacheQuantMode.hasKvCacheQuant() ? 1 : sizeof(T));
         key_value_cache = static_cast<std::byte*>(outputs[kvCacheIdxInOutputs])
             + cacheElemSize * getStride(outputDesc[kvCacheIdxInOutputs].dims, 0) * seqIdxBeg;
+        TLLM_LOG_INFO("Calculated key_value_cache pointer: %p (cacheElemSize=%zu)", key_value_cache, cacheElemSize);
+
         void const* past_key_value_cache = inputs[getIdx(IdxEntry::PAST_KEY_VALUE)];
         if (past_key_value_cache != outputs[kvCacheIdxInOutputs])
         {
+            TLLM_LOG_INFO("Copying past KV cache: from %p to %p", past_key_value_cache, outputs[kvCacheIdxInOutputs]);
             auto shape = outputDesc[kvCacheIdxInOutputs].dims;
             auto const size
                 = cacheElemSize * std::accumulate(shape.d, shape.d + shape.nbDims, 1, std::multiplies<size_t>{});
+            TLLM_LOG_INFO("KV cache copy size: %zu bytes", size);
             cudaMemcpyAsync(outputs[kvCacheIdxInOutputs], past_key_value_cache, size, cudaMemcpyDeviceToDevice, stream);
+        }
+        else
+        {
+            TLLM_LOG_INFO("Past KV cache and output are same pointer, no copy needed");
         }
     }
 
@@ -998,6 +1124,10 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     common_enqueue_params.block_offsets = block_offsets;
     common_enqueue_params.host_primary_pool_pointer = host_primary_pool_pointer;
     common_enqueue_params.host_secondary_pool_pointer = host_secondary_pool_pointer;
+    TLLM_LOG_INFO(
+        "KV cache pointers summary - key_value_cache: %p, block_offsets: %p, host_primary_pool: %p, "
+        "host_secondary_pool: %p",
+        key_value_cache, block_offsets, host_primary_pool_pointer, host_secondary_pool_pointer);
     common_enqueue_params.num_tokens = localNbTokens;
     common_enqueue_params.max_blocks_per_sequence = max_blocks_per_sequence;
     common_enqueue_params.sequence_lengths = sequence_kv_length;
@@ -1005,6 +1135,9 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     common_enqueue_params.host_context_lengths = host_context_lengths;
     common_enqueue_params.workspace = workspace;
     common_enqueue_params.runtime_perf_knobs = runtime_perf_knobs;
+    TLLM_LOG_INFO("isRelativePosition=%s", isRelativePosition() ? "true" : "false");
+    TLLM_LOG_INFO("isLognScaling=%s", isLognScaling() ? "true" : "false");
+    TLLM_LOG_INFO("isCrossAttention=%s", isCrossAttention() ? "true" : "false");
 
     if (isRelativePosition())
     {
@@ -1015,6 +1148,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     }
     if (isLognScaling())
     {
+
         common_enqueue_params.logn_scaling_ptr = static_cast<float const*>(inputs[getIdx(IdxEntry::LOGN_SCALING)]);
     }
     if (isCrossAttention())
@@ -1023,14 +1157,17 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
             = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::ENCODER_INPUT_LENGTH)]) + seqIdxBeg;
     }
 
+    TLLM_LOG_INFO("Branching on context vs generation: is_context=%d", is_context);
     if (is_context) // context stage
     {
+        TLLM_LOG_INFO("Entering context stage processing");
         int const batch_size = localNbSeq;
         int const request_batch_size = batch_size;
         // num of total tokens (without paddings when remove paddings).
         int num_encoder_tokens = 0;
         if (isCrossAttention())
         {
+            TLLM_LOG_INFO("Cross attention enabled, computing encoder tokens");
             if (!mRemovePadding)
             {
                 num_encoder_tokens = request_batch_size * max_encoder_context_len;
@@ -1039,6 +1176,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
             {
                 num_encoder_tokens = inputDesc[getIdx(IdxEntry::CROSS_KV)].dims.d[0];
             }
+            TLLM_LOG_INFO("Encoder tokens computed: %d", num_encoder_tokens);
         }
 
         common_enqueue_params.input_seq_length = max_context_q_len;
@@ -1055,8 +1193,9 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
             enqueue_params.cross_kv_length = max_encoder_context_len;
             enqueue_params.num_encoder_tokens = num_encoder_tokens;
         }
-
+        TLLM_LOG_INFO("Calling enqueueContext with batch_size=%d", batch_size);
         enqueueContext<T, KVCacheBuffer>(enqueue_params, stream);
+        TLLM_LOG_INFO("enqueueContext completed successfully");
 
         {
             std::string const afterContexStr = "ctx attention at layer " + std::to_string(mLayerIdx);
@@ -1082,10 +1221,13 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     }
     else // generation stage; max_context_q_len == input_seq_len == 1
     {
+        TLLM_LOG_INFO("Entering generation stage processing");
         TLLM_CHECK_WITH_INFO(useKVCache(), "KV-cache-less is only supported for context");
         int batch_beam = localNbSeq;
         TLLM_CHECK(batch_beam % beamWidth == 0);
         int32_t const num_requests = batch_beam / beamWidth;
+        TLLM_LOG_INFO(
+            "Generation parameters: batch_beam=%d, beamWidth=%d, num_requests=%d", batch_beam, beamWidth, num_requests);
 
         int const* cache_indir
             = beamWidth == 1 ? nullptr : reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::CACHE_INDIR)]);
@@ -1093,6 +1235,8 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         // Medusa: the max input sequence length if variable sequence length is needed.
         int const input_seq_length = getGenerationInputSequenceLength(inputDesc, localNbSeq, localNbTokens);
         int const max_past_kv_length = isCrossAttention() ? max_encoder_context_len : max_context_kv_len;
+        TLLM_LOG_INFO(
+            "Generation lengths: input_seq_length=%d, max_past_kv_length=%d", input_seq_length, max_past_kv_length);
         auto qkvDims = inputDesc[getIdx(IdxEntry::QKV_TENSOR)].dims;
         TLLM_CHECK_WITH_INFO(input_seq_length == 1 || (mIsSpecDecodingEnabled && mUseSpecDecoding),
             "Only speculative decoding mode supports input length > 1 in the generation phase, input_seq_length=%d, "
@@ -1126,11 +1270,14 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
 
         if (changeSpecDecodingMode)
         {
+            TLLM_LOG_INFO("Spec decoding mode changed, preparing enqueue generation");
             // mUseSpecDecoding is changed, need to re-prepare the DecoderXQARunner
             prepareEnqueueGeneration<T, KVCacheBuffer>(enqueue_params);
         }
 
+        TLLM_LOG_INFO("Calling enqueueGeneration");
         enqueueGeneration<T, KVCacheBuffer>(enqueue_params, stream);
+        TLLM_LOG_INFO("enqueueGeneration completed successfully");
 
         {
             std::string const afterGenStr = "gen attention at layer " + std::to_string(mLayerIdx);
@@ -1145,6 +1292,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         }
     }
 
+    TLLM_LOG_INFO("enqueueSome completed successfully, returning 0");
     return 0;
 }
 
@@ -1153,15 +1301,125 @@ int GPTAttentionPlugin::enqueueDispatchKVCacheType(nvinfer1::PluginTensorDesc co
     nvinfer1::PluginTensorDesc const* outputDesc, void const* const* inputs, void* const* outputs, void* workspace,
     cudaStream_t stream)
 {
+    // Basic pointer checks BEFORE execution
+    CHECK_NOT_NULL(inputs);
+    CHECK_NOT_NULL(outputs);
+
+    int const nbInputs = getNbInputs();
+    int const nbOutputs = getNbOutputs();
+
+    TLLM_LOG_INFO("nbInputs: %d, nbOutputs: %d", nbInputs, nbOutputs);
+
+    // Check individual input pointers
+    for (int i = 0; i < nbInputs; i++)
+    {
+        CHECK_NOT_NULL(inputs[i]);
+    }
+
+    // Check individual output pointers and log shapes
+    for (int o = 0; o < nbOutputs; o++)
+    {
+        char outputName[256];
+        sprintf(outputName, "output[%d]", o);
+        logPluginTensorShape(outputName, outputDesc[o]);
+        CHECK_NOT_NULL(outputs[o]);
+    }
+
+    // Execute the implementation
+    int result;
     if (mPagedKVCache)
     {
-        return enqueueImpl<T, AttentionOutT, KVBlockArray>(inputDesc, outputDesc, inputs, outputs, workspace, stream);
+        result = enqueueImpl<T, AttentionOutT, KVBlockArray>(inputDesc, outputDesc, inputs, outputs, workspace, stream);
     }
     else
     {
-        return enqueueImpl<T, AttentionOutT, KVLinearBuffer>(inputDesc, outputDesc, inputs, outputs, workspace, stream);
+        result
+            = enqueueImpl<T, AttentionOutT, KVLinearBuffer>(inputDesc, outputDesc, inputs, outputs, workspace, stream);
     }
-    return 0;
+
+    sync_check_cuda_error(stream);
+
+    // Print output values if kHALF AFTER execution and synchronization
+    for (int o = 0; o < nbOutputs; o++)
+    {
+        cudaPointerAttributes attr{};
+        auto pe = cudaPointerGetAttributes(&attr, outputs[o]);
+        if (pe != cudaSuccess || attr.type != cudaMemoryTypeDevice)
+        {
+            TLLM_LOG_ERROR("outputs[%d] is not a device ptr", o);
+            return -1;
+        }
+
+        if (outputDesc[o].type == nvinfer1::DataType::kHALF && result == 0)
+        {
+
+            // Calculate number of elements
+            int64_t numElements = 1;
+            for (int d = 0; d < outputDesc[o].dims.nbDims; d++)
+            {
+                numElements *= outputDesc[o].dims.d[d];
+            }
+
+            TLLM_LOG_INFO("Output[%d] is kHALF type with %lld elements, printing values:", o, numElements);
+
+            // Limit printing to avoid excessive output (max 32 elements)
+            int64_t maxPrint = std::min(numElements, (int64_t) 32);
+
+            if (numElements > 0)
+            {
+                size_t elt = (outputDesc[o].type == nvinfer1::DataType::kHALF ? 2
+                        : outputDesc[o].type == nvinfer1::DataType::kFLOAT    ? 4
+                        : outputDesc[o].type == nvinfer1::DataType::kINT8     ? 1
+                        : outputDesc[o].type == nvinfer1::DataType::kINT32    ? 4
+                                                                              : 0);
+                size_t bytes_total = size_t(numElements) * elt;
+                TLLM_LOG_INFO("Output[%d] bytes_total: %zu, numElements*sizeof(half): %zu", o, bytes_total,
+                    numElements * sizeof(__half));
+
+                // Ensure all GPU operations are complete
+                cudaError_t s = cudaStreamSynchronize(stream);
+                if (s != cudaSuccess)
+                {
+                    TLLM_LOG_ERROR("Stream sync failed before readback: %s", cudaGetErrorString(s));
+                    return -1; // kernel likely hit illegal address
+                }
+
+                // Allocate host memory for copying data
+                std::vector<__half> hostData(numElements);
+
+                // Copy data from device to host
+                cudaError_t copyResult
+                    = cudaMemcpy(hostData.data(), outputs[o], numElements * sizeof(__half), cudaMemcpyDeviceToHost);
+
+                if (copyResult == cudaSuccess)
+                {
+
+                    // Print the values
+                    std::string valuesStr = "";
+                    for (int64_t i = 0; i < maxPrint; i++)
+                    {
+                        valuesStr += std::to_string(static_cast<float>(hostData[i]));
+                        if (i < maxPrint - 1)
+                            valuesStr += ", ";
+                    }
+
+                    if (numElements > maxPrint)
+                    {
+                        valuesStr += "... (truncated)";
+                    }
+
+                    TLLM_LOG_INFO("Output[%d] values: [%s]", o, valuesStr.c_str());
+                }
+                else
+                {
+                    TLLM_LOG_ERROR(
+                        "Failed to copy output[%d] data from device to host: %s", o, cudaGetErrorString(copyResult));
+                }
+            }
+        }
+    }
+
+    return result;
 }
 
 int GPTAttentionPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,

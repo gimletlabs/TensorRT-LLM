@@ -146,6 +146,7 @@ void checkEx(
 
 inline std::optional<bool> isCudaLaunchBlocking()
 {
+    return true;
     thread_local bool firstCall = true;
     thread_local std::optional<bool> result = std::nullopt;
     if (!firstCall)

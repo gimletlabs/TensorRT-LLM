@@ -19,6 +19,7 @@
 #include "tensorrt_llm/common/envUtils.h"
 #include "tensorrt_llm/common/logger.h"
 #include "tensorrt_llm/common/memoryUtils.h"
+#include "tensorrt_llm/common/tensorDebugUtils.h"
 #include "tensorrt_llm/kernels/decoderMaskedMultiheadAttention.h"
 #include "tensorrt_llm/kernels/flashMLA/flash_mla.h"
 #include "tensorrt_llm/kernels/gptKernels.h"
@@ -1272,6 +1273,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
     PositionEmbeddingType const position_embedding_type = mPositionEmbeddingType;
     float const q_scaling = mQScaling;
 
+    TLLM_LOG_INFO("Setting up KV cache buffer");
     KVCacheBuffer kv_cache_buffer;
     auto const elemSize = mKVCacheQuantMode.hasKvCacheQuant() ? sizeof(int8_t) : sizeof(T);
     auto sizePerToken = mNumAttnKVHeads * headSize * elemSize;
@@ -1293,13 +1295,16 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
                 reinterpret_cast<BufferDataType*>(params.key_value_cache));
         }
     }
+    TLLM_LOG_INFO("KV cache buffer set up successfully");
 
     auto cublasHandle = mCublasWrapper->getCublasHandle();
     TLLM_CUDA_CHECK(cublasSetStream(cublasHandle, stream));
+    TLLM_LOG_INFO("Cublas stream set successfully");
     mCublasWrapper->setStream(stream);
     mCublasWrapper->setWorkspace(params.workspace);
     if constexpr (std::is_same_v<T, half>)
     {
+        TLLM_LOG_INFO("Setting up FP16 gemm config");
         mCublasWrapper->setFP16GemmConfig();
     }
     else if constexpr (std::is_same_v<T, float>)
@@ -1312,6 +1317,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
         mCublasWrapper->setBF16GemmConfig();
     }
 #endif
+    TLLM_LOG_INFO("Gemm config set successfully");
 
     size_t const kv_seq_length = (isCrossAttention() ? params.cross_kv_length : params.input_seq_length);
     size_t const attention_mask_size
@@ -1398,6 +1404,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
     T* gatherOutBuffer = gatherInBuffer + cpMaxPadedSequenceLength * getHeadSize() * (mNumHeads + 2 * mNumKVHeads);
     int* cu_cp_partial_seqlens = reinterpret_cast<int*>(
         gatherOutBuffer + cpMaxPadedSequenceLength * getHeadSize() * (mNumHeads + 2 * mNumKVHeads));
+    TLLM_LOG_INFO("Gather buffers set up successfully");
 
     // build attention_mask, cu_seqlens, and padding_offset tensors
     // Note: self attn and cross attn should use different params
@@ -1447,6 +1454,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
 
     invokeBuildDecoderInfo(decoder_params, stream);
     sync_check_cuda_error(stream);
+    TLLM_LOG_INFO("Build decoder info completed successfully");
 
     // In cross attention context phase, the attention mask should be a matrix of all ones.
     // We reassign attention_mask to override what previous invokeBuildDecoderInfo() does
@@ -1454,6 +1462,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
     // TODO: put this logic in the kernel above. currently not much concern because q_len is mostly = 1
     if (isUnfusedCrossAttention())
     {
+        TLLM_LOG_INFO("isUnfusedCrossAttention");
         {
             std::vector<T> h_attention_mask(params.batch_size * params.input_seq_length * params.cross_kv_length, 1.);
             std::vector<int32_t> h_encoder_input_lengths(params.batch_size);
@@ -1484,6 +1493,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
     // FIXME: a temporary solution to make sure the padding part is 0.
     if (!mRemovePadding)
     {
+        TLLM_LOG_INFO("Setting up context buffer with 0 when !mRemovePadding");
         cudaMemsetAsync(params.context_buf, 0, params.num_tokens * local_hidden_units_qo * sizeof(T), stream);
         sync_check_cuda_error(stream);
     }
@@ -1510,6 +1520,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
     // We update mEnableContextFMHA in constructor to check these conditions
     if (mEnableContextFMHA)
     {
+        TLLM_LOG_INFO("mEnableContextFMHA is true");
         // do all-to-all for params.attention_input, need to split on kv head
         // [token_num // cp_size, kv_heads, head_size] -> [token_num, kv_heads // cp_size, head_size]
         T* attention_input = const_cast<T*>(params.attention_input);
@@ -1585,6 +1596,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
         preprocessingParams.rotary_vision_start = mVisionStart;
         preprocessingParams.rotary_vision_length = mVisionLength;
 
+        TLLM_LOG_INFO("checking rope");
         {
             std::string const beforeRopeStr = "ctx attention before RoPE at layer " + std::to_string(mLayerIdx);
             TLLM_CHECK_DEBUG_WITH_INFO(tensorrt_llm::runtime::utils::tensorHasInvalid(params.num_tokens,
@@ -1594,6 +1606,7 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
                 "Found invalid number (NaN or Inf) in " + beforeRopeStr);
         }
 
+        TLLM_LOG_INFO("Calling invokeQKVPreprocessing");
         KVBlockArray mla_context_paged_kv_cache_buffer;
         if (mIsMLAEnabled)
         {
@@ -1717,6 +1730,16 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
         if (mAttentionChunkSize)
         {
             fmhaParams.chunkedAttentionSize = *mAttentionChunkSize;
+        }
+
+        TLLM_LOG_INFO("FMHA runner params: %s", fmhaParams.convertToStrOutput().c_str());
+
+        // DEBUG: Validate tensor pointers for accessibility before running kernel
+        TLLM_LOG_INFO("Starting tensor pointer validation...");
+        bool pointersValid = tensorrt_llm::common::TensorDebugUtils::validateMHARunnerParams(fmhaParams);
+        if (!pointersValid)
+        {
+            TLLM_LOG_WARNING("Some tensor pointers failed validation - proceeding with caution");
         }
 
         // Run the fmha kernel.
@@ -2032,6 +2055,8 @@ template int AttentionOp::enqueueContext<__nv_bfloat16, KVBlockArray>(
 template <typename T, typename KVCacheBuffer>
 int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cudaStream_t stream)
 {
+    TLLM_LOG_INFO("Entering enqueueGeneration: batch_beam=%d, max_past_kv_length=%d",
+        params.beam_width * params.num_requests, params.max_past_kv_length);
     int const headSize = getHeadSize();
     float const q_scaling = mQScaling;
     float const* logn_scaling_ptr = isLognScaling() ? params.logn_scaling_ptr : nullptr;
@@ -2052,15 +2077,20 @@ int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cud
     KVCacheBuffer kv_cache_buffer;
     auto const elemSize = mKVCacheQuantMode.hasKvCacheQuant() ? sizeof(int8_t) : sizeof(T);
     auto const sizePerToken = mNumAttnKVHeads * headSize * elemSize;
+    TLLM_LOG_INFO("Setting up KV cache buffer: useKVCache=%d, elemSize=%zu, sizePerToken=%zu", useKVCache(), elemSize,
+        sizePerToken);
     if (useKVCache())
     {
         if constexpr (std::is_same_v<KVCacheBuffer, KVBlockArray>)
         {
+            TLLM_LOG_INFO("Creating KVBlockArray: host_primary_pool=%p, host_secondary_pool=%p, block_offsets=%p",
+                params.host_primary_pool_pointer, params.host_secondary_pool_pointer, params.block_offsets);
             using BufferDataType = typename KVCacheBuffer::DataType;
             kv_cache_buffer = KVBlockArray(batch_beam, params.max_blocks_per_sequence, mTokensPerBlock, sizePerToken,
                 params.cyclic_attention_window_size, params.max_cyclic_attention_window_size, params.sink_token_length,
                 params.can_use_one_more_block, params.host_primary_pool_pointer, params.host_secondary_pool_pointer,
                 reinterpret_cast<BufferDataType*>(params.block_offsets));
+            TLLM_LOG_INFO("KVBlockArray created successfully");
         }
         else if constexpr (std::is_same_v<KVCacheBuffer, KVLinearBuffer>)
         {
@@ -2132,18 +2162,22 @@ int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cud
     {
         // NOTE: input_seq_length = num_medusa_tokens + 1 (new generated one from the original LM head)
         // self attn
+        TLLM_LOG_INFO("Setting up XQA parameters (mEnableXQA=%d)", mEnableXQA);
         XQAParams xqaParams{};
         this->template convertMMHAParamsToXQAParams<T, KVCacheBuffer>(xqaParams, params, /*forConfigurePlugin=*/false);
+        TLLM_LOG_INFO("XQA params converted, checking if should use XQA");
         if (mEnableXQA && mXqaDispatcher->shouldUse(xqaParams))
         {
-            TLLM_LOG_DEBUG("XQA kernels are selected in the generation phase.");
+            TLLM_LOG_INFO("XQA kernels are selected in the generation phase - calling XQA dispatcher");
             xqaParams.stream = stream;
             if (mCpSize > 1)
             {
                 xqaParams.output = mhaOutput;
                 xqaParams.qkv = attention_input;
             }
+            TLLM_LOG_INFO("About to call mXqaDispatcher->run()");
             mXqaDispatcher->run(xqaParams, kv_cache_buffer);
+            TLLM_LOG_INFO("mXqaDispatcher->run() completed successfully");
             if (mCpSize > 1 && mAttnTpSize > 1 && mAttnCpSize == 1)
             {
                 this->template ulyssesGenerationPostprocess<T>(
@@ -2159,6 +2193,10 @@ int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cud
         else if (mFuseFp4Quant)
         {
             TLLM_CHECK_WITH_INFO(false, "No available kernels are found for FP4 output.");
+        }
+        else
+        {
+            TLLM_LOG_INFO("XQA not used, proceeding to fallback attention");
         }
     }
 
@@ -2286,27 +2324,37 @@ int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cud
     dispatch_params.block_sparse_params = mBlockSparseParams;
     dispatch_params.mrope_position_deltas = params.mrope_position_deltas;
 
+    TLLM_LOG_INFO("Using fallback attention dispatch (isCrossAttention=%d)", isCrossAttention());
     using DataType = typename SATypeConverter<T>::Type;
     if (!isCrossAttention())
     {
         // self attn
+        TLLM_LOG_INFO("About to call fusedQKV_masked_attention_dispatch for self attention");
         Masked_multihead_attention_params<DataType> mmha_params;
         fusedQKV_masked_attention_dispatch(mmha_params, dispatch_params, stream);
+        TLLM_LOG_INFO("fusedQKV_masked_attention_dispatch (self attn) completed");
     }
     else
     {
         // cross attn
+        TLLM_LOG_INFO("About to call fusedQKV_masked_attention_dispatch for cross attention");
         Cross_multihead_attention_params<DataType> mmhca_params;
         fusedQKV_masked_attention_dispatch(mmhca_params, dispatch_params, stream);
+        TLLM_LOG_INFO("fusedQKV_masked_attention_dispatch (cross attn) completed");
     }
+    TLLM_LOG_INFO("About to sync_check_cuda_error after attention dispatch");
     sync_check_cuda_error(stream);
+    TLLM_LOG_INFO("sync_check_cuda_error completed");
 
     if (mCpSize > 1 && mAttnTpSize > 1 && mAttnCpSize == 1)
     {
+        TLLM_LOG_INFO("Calling ulyssesGenerationPostprocess");
         this->template ulyssesGenerationPostprocess<T>(
             mhaOutput, reinterpret_cast<T*>(params.context_buf), mhaInput, batch_beam, stream);
         sync_check_cuda_error(stream);
+        TLLM_LOG_INFO("ulyssesGenerationPostprocess completed");
     }
+    TLLM_LOG_INFO("enqueueGeneration completed successfully, returning 0");
     return 0;
 }
 
@@ -2562,6 +2610,8 @@ int AttentionOp::initialize() noexcept
         fmhaParams.attnLogitSoftcappingScale = mAttnLogitSoftcappingScale;
         fmhaParams.hasAlibi = isALiBi();
         fmhaParams.scaleAlibi = isAliBiWithScale();
+
+        TLLM_LOG_INFO("FMHA fixed params: %s", fmhaParams.convertToStrOutput().c_str());
 
         // Load kernels from the pre-compiled cubins.
         mFmhaDispatcher.reset(new FmhaDispatcher(fmhaParams));

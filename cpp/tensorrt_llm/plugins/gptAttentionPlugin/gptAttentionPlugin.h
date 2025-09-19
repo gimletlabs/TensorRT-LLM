@@ -234,6 +234,7 @@ private:
     bool isEntryUsed(IdxEntry const& entry) const;
     void initEntryIdx();
     IndexType getIdx(IdxEntry const& entry) const;
+    int getNbInputs() const;
 
     // Get generation input sequence length (might be larger than 1 in the speculative decoding mode).
     int getGenerationInputSequenceLength(

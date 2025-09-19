@@ -734,6 +734,7 @@ void FusedMHARunnerV2::run(MHARunnerParams runnerParams)
     // Need to set tma descriptors additionally.
     if (mSM == kSM_90 && mLaunchParams.use_tma)
     {
+        TLLM_LOG_INFO("Setting tma descriptors for attention input layout=%d", mFixedParams.attentionInputLayout);
         switch (mFixedParams.attentionInputLayout)
         {
         case AttentionInputLayout::PACKED_QKV: setPackedQkvTmaDescriptors(runnerParams); break;
@@ -756,6 +757,9 @@ void FusedMHARunnerV2::run(MHARunnerParams runnerParams)
                 "The sliding window size doesn't work with paged context fmha kv_step_size = %d.", kv_step);
         }
     }
+
+    TLLM_LOG_INFO("launch params:\n%s", mLaunchParams.toString().c_str());
+    TLLM_LOG_INFO("kernel params:\n%s", mKernelParams.toString().c_str());
 
     // Select the kernel and run it.
     xmmaKernel->run(mKernelParams, mLaunchParams, runnerParams.stream);

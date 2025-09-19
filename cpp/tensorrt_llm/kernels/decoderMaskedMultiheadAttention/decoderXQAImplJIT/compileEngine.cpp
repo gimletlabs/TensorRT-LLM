@@ -55,6 +55,7 @@ CubinObj CompileEngine::compile() const
 {
     tllmXqaJitProgram program;
     bool const useQGMMAKernel = supportConfigQGMMA(mXqaParams, mSM, true);
+    TLLM_LOG_INFO("useQGMMAKernel: %d", useQGMMAKernel);
     tllmXqaJitRopeStyle ropeStyle = tllmXqaJitRopeStyle::TLLM_XQA_JIT_ROPE_NONE;
     bool const applyRoPEInXqaKernel = !mXqaParams.multi_query_tokens && useQGMMAKernel
         && tensorrt_llm::common::contains({PositionEmbeddingType::kLONG_ROPE, PositionEmbeddingType::kROPE_GPT_NEOX,
@@ -104,6 +105,7 @@ CubinObj CompileEngine::compile() const
         // scratch in this case.
         /*use_input_kv=*/applyRoPEInXqaKernel,
         /*rope_style=*/ropeStyle};
+    TLLM_LOG_INFO("kernel type: %d", static_cast<int>(context.kernel_type));
     if (context.kernel_type == TLLM_XQA_JIT_MLA)
     {
         auto const& c = context;

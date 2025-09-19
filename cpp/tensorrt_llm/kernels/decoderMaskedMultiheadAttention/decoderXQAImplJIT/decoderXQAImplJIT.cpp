@@ -134,6 +134,8 @@ jit::CubinObjKey DecoderXQAImplJIT::getCubinObjKeyFromXQAParams(XQAParams const&
 
 void DecoderXQAImplJIT::prepareForActualXQAParams(XQAParams const& xqaParams)
 {
+    TLLM_LOG_INFO("XQAParams debug info:\n%s", xqaParams.toString().c_str());
+
     jit::CubinObjKey currentKey = getCubinObjKeyFromXQAParams(xqaParams);
 
     jit::CompileEngine compileEngine(mSM, xqaParams);
@@ -196,7 +198,7 @@ struct SpecDecParams
     uint32_t qSeqLen;
     uint32_t const* qCuSeqLens; // [nbReq + 1]
     using MaskType = uint32_t;
-    MaskType const* mask;       // [nbReq][qSeqLen][divUp(qSeqLen, 32)] or [qCuSeqLen[nbReq]][divUp(qSeqLen, 32)]
+    MaskType const* mask; // [nbReq][qSeqLen][divUp(qSeqLen, 32)] or [qCuSeqLen[nbReq]][divUp(qSeqLen, 32)]
 };
 } // namespace
 

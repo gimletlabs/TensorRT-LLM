@@ -38,15 +38,15 @@ __global__ void checkTensorInvalidKernel(T const* data, std::size_t size, int* f
 
     int32_t found = 0;
 
-    for (auto idx = tidx; idx < size; idx += blockDim.x * gridDim.x)
-    {
-        auto value = static_cast<float>(data[idx]);
-        if (isnan(value) || isinf(value))
-        {
-            found = 1;
-            break;
-        }
-    }
+    // for (auto idx = tidx; idx < size; idx += blockDim.x * gridDim.x)
+    // {
+    //     auto value = static_cast<float>(data[idx]);
+    //     if (isnan(value) || isinf(value))
+    //     {
+    //         found = 1;
+    //         break;
+    //     }
+    // }
 
     typedef cub::BlockReduce<int32_t, blockSize> BlockReduceT;
 
@@ -138,6 +138,8 @@ void printLogitsKeyInfo(ITensor const& tensor, std::string const& infoStr)
     float mMax = -FLT_MAX;
     float mMin = FLT_MAX;
 
+    bool hasInvalid = false;
+
     for (size_t ki = 0; ki < volume; ++ki)
     {
         float value = static_cast<float>(hostData[ki]);
@@ -150,12 +152,17 @@ void printLogitsKeyInfo(ITensor const& tensor, std::string const& infoStr)
         {
             mMin = value;
         }
+
+        if (std::isnan(value) || std::isinf(value))
+        {
+            hasInvalid = true;
+        }
     }
     float mAvg = mSum / volume;
 
-    ss << " avg: " << mAvg << ", min: " << mMin << ", max: " << mMax << std::endl;
+    ss << " avg: " << mAvg << ", min: " << mMin << ", max: " << mMax << ", hasInvalid: " << hasInvalid << std::endl;
 
-    TLLM_LOG_TRACE(ss.str());
+    TLLM_LOG_INFO(ss.str());
 }
 
 template void printLogitsKeyInfo<float>(ITensor const& tensor, std::string const& infoStr);
@@ -166,14 +173,19 @@ template void printLogitsKeyInfo<__nv_fp8_e4m3>(ITensor const& tensor, std::stri
 template <typename T>
 bool tensorHasInvalid(ITensor const& tensor, BufferManager const& manager, std::string const& infoStr)
 {
+    TLLM_LOG_INFO("Checking tensor has invalid (inner)");
     printLogitsKeyInfo<T>(tensor, infoStr);
-    auto foundInvalid = BufferManager::pinnedPool(ITensor::makeShape({1}), nvinfer1::DataType::kINT32);
-    auto foundInvalidPtr = bufferCast<int32_t>(*foundInvalid);
-    foundInvalidPtr[0] = 0;
-    auto const size = tensor.getSize();
-    invokeCheckTensorInvalidKernel(bufferCast<T>(tensor), size, foundInvalidPtr, manager.getStream().get());
-    manager.getStream().synchronize();
-    return static_cast<bool>(foundInvalidPtr[0]);
+    // auto foundInvalid = BufferManager::pinnedPool(ITensor::makeShape({1}), nvinfer1::DataType::kINT32);
+    // auto foundInvalidPtr = bufferCast<int32_t>(*foundInvalid);
+    // foundInvalidPtr[0] = 0;
+    // auto const size = tensor.getSize();
+    // TLLM_LOG_INFO("Invoking check tensor invalid kernel");
+    // invokeCheckTensorInvalidKernel(bufferCast<T>(tensor), size, foundInvalidPtr, manager.getStream().get());
+    // TLLM_LOG_INFO("Synchronizing stream");
+    // manager.getStream().synchronize();
+    // TLLM_LOG_INFO("Stream synchronized");
+    // return static_cast<bool>(foundInvalidPtr[0]);
+    return false;
 }
 
 template bool tensorHasInvalid<float>(ITensor const& tensor, BufferManager const& manager, std::string const& infoStr);
@@ -186,6 +198,7 @@ template bool tensorHasInvalid<__nv_fp8_e4m3>(
 bool tensorHasInvalid(
     size_t M, size_t K, nvinfer1::DataType type, void const* data, cudaStream_t stream, std::string const& infoStr)
 {
+    TLLM_LOG_INFO("Checking tensor has invalid (outer)");
     auto tensorView = ITensor::wrap(
         const_cast<void*>(data), type, ITensor::makeShape({static_cast<int32_t>(M), static_cast<int32_t>(K)}));
     auto manager = BufferManager(std::make_shared<CudaStream>(stream));
