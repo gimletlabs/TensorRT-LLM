@@ -71,13 +71,12 @@ int main()
         mha_utils_cuh_content,
         mma_cuh_content,
         platform_h_content,
-        ref_checker_cuh_content,
         utils_cuh_content,
         utils_h_content,
-        mha_stdheaders_h_content,
+        mha_stdheaders_cuh_content,
         gmma_cuh_content,
         gmma_impl_cuh_content,
-        barriers_h_content,
+        barriers_cuh_content,
         tma_h_content,
         cuda_bf16_h_content,
         cuda_bf16_hpp_content,
@@ -87,11 +86,12 @@ int main()
         cuda_fp8_hpp_content,
         vector_types_h_content,
         vector_functions_h_content,
+        mha_components_cuh_content,
     };
     std::vector<char const*> headers_name = {"cuda_hint.cuh", "defines.h", "ldgsts.cuh", "mha.h", "mhaUtils.cuh",
-        "mma.cuh", "platform.h", "ref_checker.cuh", "utils.cuh", "utils.h", "mha_stdheaders.cuh", "gmma.cuh",
-        "gmma_impl.cuh", "barriers.cuh", "tma.h", "cuda_bf16.h", "cuda_bf16.hpp", "cuda_fp16.h", "cuda_fp16.hpp",
-        "cuda_fp8.h", "cuda_fp8.hpp", "vector_types.h", "vector_functions.h"};
+        "mma.cuh", "platform.h", "utils.cuh", "utils.h", "mha_stdheaders.cuh", "gmma.cuh", "gmma_impl.cuh",
+        "barriers.cuh", "tma.h", "cuda_bf16.h", "cuda_bf16.hpp", "cuda_fp16.h", "cuda_fp16.hpp", "cuda_fp8.h",
+        "cuda_fp8.hpp", "vector_types.h", "vector_functions.h", "mha_components.cuh"};
     for (bool use_paged_kv_cache : {false, true})
     {
         for (int beam_width : {1, 2, 4})
