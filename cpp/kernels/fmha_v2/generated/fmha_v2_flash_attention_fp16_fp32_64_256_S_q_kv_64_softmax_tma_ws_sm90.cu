@@ -53,7 +53,7 @@ using Ktraits = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp32_traits,
                 NUM_COMPUTE_GROUPS,
                 DMA2COMPUTE_DEPTH,
                 0,
-                true,
+                false,
                 false,
                 false,
                 1,
@@ -75,7 +75,7 @@ using Ktraits_causal = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp32_traits,
                        NUM_COMPUTE_GROUPS,
                        DMA2COMPUTE_DEPTH,
                        1,
-                       true,
+                       false,
                        false,
                        false,
                        1,
@@ -94,7 +94,7 @@ using Ktraits_sliding_or_chunked_causal = fmha::ws::Kernel_traits<fmha::Hopper_h
                                       NUM_COMPUTE_GROUPS,
                                       DMA2COMPUTE_DEPTH,
                                       2,
-                                      true,
+                                      false,
                                       false,
                                       false,
                                       1,
@@ -113,7 +113,7 @@ using Ktraits_custom_mask = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp32_trai
                             NUM_COMPUTE_GROUPS,
                             DMA2COMPUTE_DEPTH,
                             3,
-                            true,
+                            false,
                             false,
                             false,
                             1,
@@ -188,7 +188,7 @@ void fmha_v2_flash_attention_fp16_fp32_64_256_S_q_kv_64_softmax_tma_ws_sm90_kern
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if 1 // causal_mask
+#if 0 // causal_mask
 
 using Shared_causal = typename Ktraits_causal::Shared;
 
@@ -251,7 +251,7 @@ void fmha_v2_flash_attention_fp16_fp32_64_256_S_q_kv_64_causal_softmax_tma_ws_sm
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if 1 // sliding_or_chunked_causal_mask
+#if 0 // sliding_or_chunked_causal_mask
 
 using Shared_sliding_or_chunked_causal = typename Ktraits_sliding_or_chunked_causal::Shared;
 
@@ -438,7 +438,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_256_S_q_kv_64_softmax_tma_ws_sm90(
             <<<block_size, Ktraits::THREADS, SMEM_BYTES, stream>>>(reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params));
 #endif // padding_mask
     } else if( launch_params.attention_mask_type == Attention_mask_type::CAUSAL ) {
-#if 1 // causal_mask
+#if 0 // causal_mask
         FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_256_S_q_kv_64_causal_softmax_tma_ws_sm90_kernel,
                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
                                          SMEM_BYTES));
@@ -447,7 +447,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_256_S_q_kv_64_softmax_tma_ws_sm90(
             <<<block_size, Ktraits::THREADS, SMEM_BYTES, stream>>>(reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params));
 #endif // causal mask
     } else if( launch_params.attention_mask_type == Attention_mask_type::SLIDING_OR_CHUNKED_CAUSAL ) {
-#if 1 // sliding_or_chunked_causal_mask
+#if 0 // sliding_or_chunked_causal_mask
         FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_256_S_q_kv_64_sliding_or_chunked_causal_softmax_tma_ws_sm90_kernel,
                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
                                          SMEM_BYTES));

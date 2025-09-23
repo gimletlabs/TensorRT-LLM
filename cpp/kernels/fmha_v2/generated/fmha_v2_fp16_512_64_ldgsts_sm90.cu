@@ -64,7 +64,7 @@ using Kernel_traits = FMHA_kernel_traits_hopper_v2<
                        4,
                        2,
                        2,
-                       0x07u>;
+                       0x27u>;
 
 using Kernel_traits_causal = FMHA_kernel_traits_hopper_v2<
                               Traits_p,
@@ -75,7 +75,7 @@ using Kernel_traits_causal = FMHA_kernel_traits_hopper_v2<
                               4,
                               2,
                               3,
-                              0x07u>;
+                              0x27u>;
 
 using Kernel_traits_sliding_or_chunked_causal = FMHA_kernel_traits_hopper_v2<
                                            Traits_p,
@@ -86,7 +86,7 @@ using Kernel_traits_sliding_or_chunked_causal = FMHA_kernel_traits_hopper_v2<
                                            4,
                                            2,
                                            4,
-                                           0x07u>;
+                                           0x27u>;
 
 #if 0 // use_tma
 
@@ -289,7 +289,7 @@ using Kernel_traits_nl = FMHA_kernel_traits_hopper_v2<
                           4,
                           2,
                           2,
-                          0x07u>;
+                          0x27u>;
 
 using Kernel_traits_causal_nl = FMHA_kernel_traits_hopper_v2<
                                  Traits_p,
@@ -300,7 +300,7 @@ using Kernel_traits_causal_nl = FMHA_kernel_traits_hopper_v2<
                                  4,
                                  2,
                                  3,
-                                 0x07u>;
+                                 0x27u>;
 
 using Kernel_traits_sliding_or_chunked_causal_nl = FMHA_kernel_traits_hopper_v2<
                                               Traits_p,
@@ -311,7 +311,7 @@ using Kernel_traits_sliding_or_chunked_causal_nl = FMHA_kernel_traits_hopper_v2<
                                               4,
                                               2,
                                               4,
-                                              0x07u>;
+                                              0x27u>;
 
 #if 1 // padding_mask
 

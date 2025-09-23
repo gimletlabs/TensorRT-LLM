@@ -53,7 +53,7 @@ using Ktraits = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp16_traits,
                 NUM_COMPUTE_GROUPS,
                 DMA2COMPUTE_DEPTH,
                 0,
-                true,
+                false,
                 false,
                 true,
                 1,
@@ -75,7 +75,7 @@ using Ktraits_causal = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp16_traits,
                        NUM_COMPUTE_GROUPS,
                        DMA2COMPUTE_DEPTH,
                        1,
-                       true,
+                       false,
                        false,
                        true,
                        1,
@@ -94,7 +94,7 @@ using Ktraits_sliding_or_chunked_causal = fmha::ws::Kernel_traits<fmha::Hopper_h
                                       NUM_COMPUTE_GROUPS,
                                       DMA2COMPUTE_DEPTH,
                                       2,
-                                      true,
+                                      false,
                                       false,
                                       true,
                                       1,
@@ -113,7 +113,7 @@ using Ktraits_custom_mask = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp16_trai
                             NUM_COMPUTE_GROUPS,
                             DMA2COMPUTE_DEPTH,
                             3,
-                            true,
+                            false,
                             false,
                             true,
                             1,
@@ -125,7 +125,7 @@ using Ktraits_custom_mask = fmha::ws::Kernel_traits<fmha::Hopper_hgmma_fp16_trai
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if 1 // padding_mask
+#if 0 // padding_mask
 
 using Shared = typename Ktraits::Shared;
 
@@ -429,7 +429,7 @@ void run_fmha_v2_flash_attention_fp16_64_64_S_q_paged_kv_160_tma_ws_sm90(
     // Reuse the same bytes_per_smem for launching kernels.
     constexpr int SMEM_BYTES = Ktraits::BYTES_PER_SMEM;
     if( launch_params.attention_mask_type == Attention_mask_type::PADDING ) {
-#if 1 // padding_mask
+#if 0 // padding_mask
         FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_64_64_S_q_paged_kv_160_tma_ws_sm90_kernel,
                                          cudaFuncAttributeMaxDynamicSharedMemorySize,
                                          SMEM_BYTES));

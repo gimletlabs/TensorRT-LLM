@@ -57,7 +57,7 @@ using Kernel_traits = fmha::Kernel_traits_v2_contiguous_kv_cache<
     4,
     1,
     1,
-    0x07u>;
+    0x27u>;
 
 extern "C"
 __global__
@@ -92,7 +92,7 @@ using Kernel_traits_nl = fmha::Kernel_traits_v2_contiguous_kv_cache<
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*dense mask*/ 2,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -109,7 +109,7 @@ using Kernel_traits_nl_causal = fmha::Kernel_traits_v2_contiguous_kv_cache<
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*causal mask*/ 3,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -126,7 +126,7 @@ using Kernel_traits_nl_sliding_or_chunked_causal = fmha::Kernel_traits_v2_contig
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*sliding window causal mask*/ 4,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -143,7 +143,7 @@ using Kernel_traits_nl_custom_mask = fmha::Kernel_traits_v2_contiguous_kv_cache<
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*custom mask*/ 5,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -161,7 +161,7 @@ void fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sm89_kernel_nl(bert::Fus
 
 #endif // padding mask
 
-#if 1 // causal_mask
+#if 0 // causal_mask
 
 extern "C"
 __global__
@@ -171,7 +171,7 @@ void fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_causal_sm89_kernel_nl(be
 
 #endif // causal mask
 
-#if 1 // sliding_or_chunked_causal_mask
+#if 0 // sliding_or_chunked_causal_mask
 
 extern "C"
 __global__
@@ -202,7 +202,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sm89_nl(
   dim3 grid(loop_iters, params.h, params.b); // better locality
   constexpr int smem_size = Kernel_traits_nl::BYTES_PER_SMEM;
   if( launch_params.attention_mask_type == Attention_mask_type::CAUSAL ) {
-#if 1 // causal_mask
+#if 0 // causal_mask
     if( smem_size >= 48*1024 ) {
       FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_causal_sm89_kernel_nl,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -211,7 +211,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sm89_nl(
     fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_causal_sm89_kernel_nl<<<grid, Kernel_traits_nl::THREADS, Kernel_traits_nl::BYTES_PER_SMEM, stream>>>(reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params));
 #endif // causal mask
   } else if( launch_params.attention_mask_type == Attention_mask_type::SLIDING_OR_CHUNKED_CAUSAL ) {
-#if 1 // sliding_or_chunked_causal_mask
+#if 0 // sliding_or_chunked_causal_mask
     if( smem_size >= 48*1024 ) {
        FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sliding_or_chunked_causal_sm89_kernel_nl,
                                         cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -253,7 +253,7 @@ using Kernel_traits_nl_tiled = fmha::Kernel_traits_v2_contiguous_kv_cache<
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*dense mask*/ 2,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -270,7 +270,7 @@ using Kernel_traits_nl_tiled_causal = fmha::Kernel_traits_v2_contiguous_kv_cache
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*causal mask*/ 3,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -287,7 +287,7 @@ using Kernel_traits_nl_tiled_sliding_or_chunked_causal = fmha::Kernel_traits_v2_
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*sliding window causal mask*/ 4,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -304,7 +304,7 @@ using Kernel_traits_nl_tiled_custom_mask = fmha::Kernel_traits_v2_contiguous_kv_
     4,
     1,
     1,
-    0x07u | 0x200 /* no_loop flag */,
+    0x27u | 0x200 /* no_loop flag */,
     /*custom mask*/ 5,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -322,7 +322,7 @@ void fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sm89_kernel_nl_tiled(ber
 
 #endif // padding_mask
 
-#if 1 // causal_mask
+#if 0 // causal_mask
 
 extern "C"
 __global__
@@ -332,7 +332,7 @@ void fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_causal_sm89_kernel_nl_ti
 
 #endif // causal mask
 
-#if 1 // sliding_or_chunked_causal_mask
+#if 0 // sliding_or_chunked_causal_mask
 
 extern "C"
 __global__
@@ -364,7 +364,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sm89_nl_tiled(
   dim3 grid(loop_iters * ctas_per_o_row, params.h, params.b);
   constexpr int smem_size = Kernel_traits_nl_tiled::BYTES_PER_SMEM;
   if( launch_params.attention_mask_type == Attention_mask_type::CAUSAL ) {
-#if 1 // causal_mask
+#if 0 // causal_mask
     if( smem_size >= 48*1024 ) {
       FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_causal_sm89_kernel_nl_tiled,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -373,7 +373,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sm89_nl_tiled(
     fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_causal_sm89_kernel_nl_tiled<<<grid, Kernel_traits_nl_tiled::THREADS, Kernel_traits_nl_tiled::BYTES_PER_SMEM, stream>>>(reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params));
 #endif // causal mask
   } else if( launch_params.attention_mask_type == Attention_mask_type::SLIDING_OR_CHUNKED_CAUSAL ) {
-#if 1 // sliding_or_chunked_causal_mask
+#if 0 // sliding_or_chunked_causal_mask
     if( smem_size >= 48*1024 ) {
        FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_32_S_q_kv_128_sliding_or_chunked_causal_sm89_kernel_nl_tiled,
                                         cudaFuncAttributeMaxDynamicSharedMemorySize,

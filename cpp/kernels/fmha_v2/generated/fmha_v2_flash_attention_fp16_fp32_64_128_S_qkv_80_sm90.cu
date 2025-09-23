@@ -57,7 +57,7 @@ using Kernel_traits = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u>;
+    0x1027u>;
 
 extern "C"
 __global__
@@ -92,7 +92,7 @@ using Kernel_traits_nl = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*dense mask*/ 2,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -109,7 +109,7 @@ using Kernel_traits_nl_causal = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*causal mask*/ 3,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -126,7 +126,7 @@ using Kernel_traits_nl_sliding_or_chunked_causal = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*sliding window causal mask*/ 4,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -143,7 +143,7 @@ using Kernel_traits_nl_custom_mask = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*custom mask*/ 5,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -151,7 +151,7 @@ using Kernel_traits_nl_custom_mask = fmha::Kernel_traits_v2<
     0,
     0>;
 
-#if 1 // padding_mask
+#if 0 // padding_mask
 
 extern "C"
 __global__
@@ -220,7 +220,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_128_S_qkv_80_sm90_nl(
     fmha_v2_flash_attention_fp16_fp32_64_128_S_qkv_80_sliding_or_chunked_causal_sm90_kernel_nl<<<grid, Kernel_traits_nl::THREADS, Kernel_traits_nl::BYTES_PER_SMEM, stream>>>(reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params));
 #endif // sliding_or_chunked_causal_mask
   } else if( launch_params.attention_mask_type == Attention_mask_type::PADDING ) {
-#if 1 // padding_mask
+#if 0 // padding_mask
     if( smem_size >= 48*1024 ) {
       FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_128_S_qkv_80_sm90_kernel_nl,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -253,7 +253,7 @@ using Kernel_traits_nl_tiled = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*dense mask*/ 2,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -270,7 +270,7 @@ using Kernel_traits_nl_tiled_causal = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*causal mask*/ 3,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -287,7 +287,7 @@ using Kernel_traits_nl_tiled_sliding_or_chunked_causal = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*sliding window causal mask*/ 4,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -304,7 +304,7 @@ using Kernel_traits_nl_tiled_custom_mask = fmha::Kernel_traits_v2<
     4,
     1,
     1,
-    0x1007u | 0x200 /* no_loop flag */,
+    0x1027u | 0x200 /* no_loop flag */,
     /*custom mask*/ 5,
     /*bmm2_fp16_epilogue*/ true,
     fmha::fp16_t,
@@ -312,7 +312,7 @@ using Kernel_traits_nl_tiled_custom_mask = fmha::Kernel_traits_v2<
     0,
     0>;
 
-#if 1 // padding_mask
+#if 0 // padding_mask
 
 extern "C"
 __global__
@@ -382,7 +382,7 @@ void run_fmha_v2_flash_attention_fp16_fp32_64_128_S_qkv_80_sm90_nl_tiled(
     fmha_v2_flash_attention_fp16_fp32_64_128_S_qkv_80_sliding_or_chunked_causal_sm90_kernel_nl_tiled<<<grid, Kernel_traits_nl_tiled::THREADS, Kernel_traits_nl_tiled::BYTES_PER_SMEM, stream>>>(reinterpret_cast<bert::Fused_multihead_attention_params_v2 &>(params));
 #endif // sliding_or_chunked_causal_mask
   } else if( launch_params.attention_mask_type == Attention_mask_type::PADDING ) {
-#if 1 // padding_mask
+#if 0 // padding_mask
     if( smem_size >= 48*1024 ) {
       FMHA_CHECK_CUDA(cudaFuncSetAttribute(fmha_v2_flash_attention_fp16_fp32_64_128_S_qkv_80_sm90_kernel_nl_tiled,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
