@@ -809,7 +809,9 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     int const* cyclic_attention_window_sizes
         = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::HOST_MAX_ATTENTION_WINDOW)]);
     int const cyclic_attention_window_size
-        = isCrossAttention() ? max_encoder_context_len : cyclic_attention_window_sizes[mLayerIdx];
+        // TODO hack
+        // = isCrossAttention() ? max_encoder_context_len : cyclic_attention_window_sizes[mLayerIdx];
+        = isCrossAttention() ? max_encoder_context_len : cyclic_attention_window_sizes[0];
     int const sink_token_length = reinterpret_cast<int const*>(inputs[getIdx(IdxEntry::HOST_SINK_TOKEN_LENGTH)])[0];
     int const num_attn_layer = inputDesc[getIdx(IdxEntry::HOST_MAX_ATTENTION_WINDOW)].dims.d[0];
     int const max_cyclic_attention_window_size = isCrossAttention()
