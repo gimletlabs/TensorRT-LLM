@@ -219,11 +219,11 @@ void FusedMHARunnerV2::setupKernelParams(MHARunnerParams runnerParams)
     mKernelParams.q_ptr = runnerParams.qPtr;
     mKernelParams.kv_ptr = runnerParams.kvPtr;
     mKernelParams.o_ptr = runnerParams.outputPtr;
-    if (mFixedParams.attentionMaskType == ContextAttentionMaskType::CUSTOM_MASK)
-    {
-        mKernelParams.packed_mask_ptr = runnerParams.packedMaskPtr;
-        mKernelParams.cu_mask_rows = reinterpret_cast<int const*>(runnerParams.cuMaskRowsPtr);
-    }
+    // if (mFixedParams.attentionMaskType == ContextAttentionMaskType::CUSTOM_MASK)
+    // {
+    mKernelParams.packed_mask_ptr = runnerParams.packedMaskPtr;
+    mKernelParams.cu_mask_rows = reinterpret_cast<int const*>(runnerParams.cuMaskRowsPtr);
+    // }
     mKernelParams.cu_q_seqlens = reinterpret_cast<int const*>(runnerParams.cuQSeqLenPtr);
     mKernelParams.tile_id_counter_ptr = reinterpret_cast<uint32_t*>(runnerParams.tileCounterPtr);
     // TRT doesn't support host scales. Use device scales instead.
