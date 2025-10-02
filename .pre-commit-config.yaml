@@ -1442,6 +1442,7 @@ repos:
         - tomli
         # add ignore words list
         args: ["-L", "Mor,ans,thirdparty,subtiles", "--skip", "ATTRIBUTIONS-*.md,*.svg", "--skip", "security_scanning/*"]
+        exclude: '^\.git/COMMIT_EDITMSG$'
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.4
     hooks:
