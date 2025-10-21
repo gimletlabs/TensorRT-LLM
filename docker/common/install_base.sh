@@ -77,6 +77,40 @@ init_ubuntu() {
   pip3 uninstall -y tensorrt
 }
 
+init_ubuntu_2204() {
+  apt-get update
+  # libibverbs-dev is installed but libmlx5.so is missing, reinstall the package
+  apt-get --reinstall install -y libibverbs-dev
+  apt-get install -y --no-install-recommends \
+    ccache \
+    gdb \
+    git-lfs \
+    clang \
+    lld \
+    llvm \
+    libffi-dev \
+    libnuma1 \
+    libnuma-dev \
+    python3-dev \
+    python3-pip \
+    python-is-python3 \
+    wget \
+    pigz \
+    libzmq3-dev
+  if ! command -v mpirun &> /dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev
+  fi
+  echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> "${ENV}"
+  # Remove previous TRT installation
+  if [[ $(apt list --installed | grep libnvinfer) ]]; then
+    apt-get remove --purge -y libnvinfer*
+  fi
+  if [[ $(apt list --installed | grep tensorrt) ]]; then
+    apt-get remove --purge -y tensorrt*
+  fi
+  pip3 uninstall -y tensorrt
+}
+
 install_python_rockylinux() {
   PYTHON_VERSION=$1
   PYTHON_MAJOR="3"
@@ -138,10 +172,18 @@ install_gcctoolset_rockylinux() {
 
 # Install base packages depending on the base OS
 ID=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+VERSION_ID=$(grep -oP '(?<=^VERSION_ID=).+' /etc/os-release | tr -d '"')
 set_bash_env
 case "$ID" in
   ubuntu)
-    init_ubuntu
+    case "$VERSION_ID" in
+      22.04)
+        init_ubuntu_2204
+        ;;
+      *)
+        init_ubuntu
+        ;;
+    esac
     ;;
   rocky)
     install_python_rockylinux $1
