@@ -108,16 +108,21 @@ COPY docker/common/install_triton.sh \
      ./
 
 # Install Mooncake, after triton handles boost requirement
-RUN GITHUB_MIRROR=${GITHUB_MIRROR} bash ./install_triton.sh && \
-    if [ -f /etc/redhat-release ]; then \
-        echo "Rocky8 detected, skipping mooncake installation"; \
-    else \
-        bash ./install_mooncake.sh; \
-    fi && \
-    rm install_triton.sh && \
-    rm install_mooncake.sh
+# RUN GITHUB_MIRROR=${GITHUB_MIRROR} bash ./install_triton.sh && \
+#     if [ -f /etc/redhat-release ]; then \
+#         echo "Rocky8 detected, skipping mooncake installation"; \
+#     else \
+#         bash ./install_mooncake.sh; \
+#     fi && \
+#     rm install_triton.sh && \
+#     rm install_mooncake.sh
 
 FROM ${DEVEL_IMAGE} AS wheel
+RUN apt-get update && apt-get install -y \
+  libtool \
+  pkg-config \
+  patchelf
+
 WORKDIR /src/tensorrt_llm
 COPY benchmarks benchmarks
 COPY cpp cpp
