@@ -646,6 +646,7 @@ def main(*,
             cmake_def_args = " ".join(cmake_def_args)
             cmake_configure_command = (
                 f'cmake -DCMAKE_BUILD_TYPE="{build_type}" -DBUILD_PYT="{build_pyt}" -DBINDING_TYPE="{binding_type}" -DBUILD_DEEP_EP="{build_deep_ep}" -DBUILD_DEEP_GEMM="{build_deep_gemm}"'
+                f' -DCUDA_TOOLKIT_ROOT_DIR="/usr/local/cuda"'
                 f' -DNVTX_DISABLE="{disable_nvtx}" -DBUILD_MICRO_BENCHMARKS={build_micro_benchmarks}'
                 f' -DBUILD_WHEEL_TARGETS="{";".join(targets)}"'
                 f' -DPython_EXECUTABLE={venv_python} -DPython3_EXECUTABLE={venv_python}'
@@ -840,10 +841,6 @@ def main(*,
     if scripts_dir.exists():
         clear_folder(scripts_dir)
     scripts_dir.mkdir(parents=True, exist_ok=True)
-
-    if not on_windows:
-        install_file(project_dir / "docker/common/install_tensorrt.sh",
-                     scripts_dir / "install_tensorrt.sh")
 
     if not cpp_only:
 
