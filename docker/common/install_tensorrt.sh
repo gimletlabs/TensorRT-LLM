@@ -5,21 +5,20 @@ set -ex
 TRT_VER="10.13.2.6"
 # Align with the pre-installed cuDNN / cuBLAS / NCCL versions from
 # https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-08.html#rel-25-08
-CUDA_VER="13.0" # 13.0.0
+CUDA_VER="12.9" # 13.0.0
 # Keep the installation for cuDNN if users want to install PyTorch with source codes.
 # PyTorch 2.x can compile with cuDNN v9.
-CUDNN_VER="9.12.0.46-1"
+CUDNN_VER="9.14.0.64-1"
 # NCCL version 2.26.x used in the NGC PyTorch 25.05 image but has a performance regression issue.
 # Use NCCL version 2.27.5 which has the fixes.
-NCCL_VER="2.27.7-1+cuda13.0"
+NCCL_VER="2.27.3-1+cuda12.9"
 # Use cuBLAS version 13.0.0.19 instead.
-CUBLAS_VER="13.0.0.19-1"
+CUBLAS_VER="12.9.1.4-1"
 # Align with the pre-installed CUDA / NVCC / NVRTC versions from
 # https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html
-NVRTC_VER="13.0.48-1"
-CUDA_RUNTIME="13.0.48-1"
-CUDA_DRIVER_VERSION="580.65.06-1.el8"
-
+NVRTC_VER="12.9.86-1"
+CUDA_RUNTIME="12.9.86-1"
+CUDA_DRIVER_VERSION="575.57.08-0ubuntu1"
 for i in "$@"; do
     case $i in
         --TRT_VER=?*) TRT_VER="${i#*=}";;
@@ -51,23 +50,23 @@ install_ubuntu_requirements() {
     if [[ $(apt list --installed | grep libcudnn9) ]]; then
       apt-get remove --purge -y libcudnn9*
     fi
-    if [[ $(apt list --installed | grep libnccl) ]]; then
-      apt-get remove --purge -y --allow-change-held-packages libnccl*
-    fi
-    if [[ $(apt list --installed | grep libcublas) ]]; then
-      apt-get remove --purge -y --allow-change-held-packages libcublas*
-    fi
-    if [[ $(apt list --installed | grep cuda-nvrtc-dev) ]]; then
-      apt-get remove --purge -y --allow-change-held-packages cuda-nvrtc-dev*
-    fi
+    #if [[ $(apt list --installed | grep libnccl) ]]; then
+    #  apt-get remove --purge -y --allow-change-held-packages libnccl*
+    #fi
+    #if [[ $(apt list --installed | grep libcublas) ]]; then
+    #  apt-get remove --purge -y --allow-change-held-packages libcublas*
+    #fi
+    #if [[ $(apt list --installed | grep cuda-nvrtc-dev) ]]; then
+    #  apt-get remove --purge -y --allow-change-held-packages cuda-nvrtc-dev*
+    #fi
 
     CUBLAS_CUDA_VERSION=$(echo $CUDA_VER | sed 's/\./-/g')
     NVRTC_CUDA_VERSION=$(echo $CUDA_VER | sed 's/\./-/g')
 
     apt-get install -y --no-install-recommends \
-        libcudnn9-cuda-13=${CUDNN_VER} \
-        libcudnn9-dev-cuda-13=${CUDNN_VER} \
-        libcudnn9-headers-cuda-13=${CUDNN_VER} \
+        libcudnn9-cuda-12=${CUDNN_VER} \
+        libcudnn9-dev-cuda-12=${CUDNN_VER} \
+        libcudnn9-headers-cuda-12=${CUDNN_VER} \
         libnccl2=${NCCL_VER} \
         libnccl-dev=${NCCL_VER} \
         libcublas-${CUBLAS_CUDA_VERSION}=${CUBLAS_VER} \

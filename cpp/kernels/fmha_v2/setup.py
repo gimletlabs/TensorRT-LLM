@@ -13,6 +13,7 @@ import subprocess
 from collections import namedtuple
 from enum import IntEnum
 from itertools import product
+from functools import partial
 
 sm2name = {
     70: 'volta',
@@ -87,6 +88,8 @@ dtype2typename = {
 }
 
 pythonBoolean2cpp = {True: 'true', False: 'false'}
+
+run_shell = partial(subprocess.run, shell=True, check=True)
 
 
 # same definition as fused_multihead_attention.h.
@@ -3507,22 +3510,12 @@ def generate_files(specs_names):
     # Make sure we have a bin directory.
     if not os.path.exists('bin'):
         os.mkdir('bin')
-    cmd = 'nvcc -I src -Xcompiler -Wno-enum-compare --std=c++17 -o bin/print_traits.exe generated/print_kernel_traits.cu'.split(
-    )
-    if 'CUDA_PATH' in os.environ:
-        cmd[0] = os.environ['CUDA_PATH'] + '/bin/' + cmd[0]
-    print('Running command "{}" to build "bin/print_traits.exe":'.format(
-        ' '.join(cmd)))
-    process = subprocess.Popen(cmd,
-                               stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE)
-    output, error = process.communicate()
+    cmd = 'nvcc -I src -Xcompiler -Wno-enum-compare --std=c++17 -o bin/print_traits.exe generated/print_kernel_traits.cu'
+    print('Running command "{}" to build "bin/print_traits.exe":'.format(cmd))
+    res = run_shell(cmd, capture_output=True)
     print('Running "bin/print_traits.exe":')
-    process = subprocess.Popen('bin/print_traits.exe',
-                               stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE)
-    output, error = process.communicate()
-    output = output.decode('utf-8').strip()
+    res = run_shell('bin/print_traits.exe', capture_output=True)
+    output = res.stdout.decode('utf-8').strip()
     # this gives: kname, smem bytes, threads_per_cta, loop_step
     kernel_traits = [traits.split() for traits in output.splitlines()]
     cubin_header = get_cubin_header(kernel_traits, valid_specs_names)
