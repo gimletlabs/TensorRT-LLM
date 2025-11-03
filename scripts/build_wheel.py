@@ -475,7 +475,8 @@ def main(*,
          skip_stubs: bool = False,
          generate_fmha: bool = False,
          no_venv: bool = False,
-         nvrtc_dynamic_linking: bool = False):
+         nvrtc_dynamic_linking: bool = False,
+         only_run_setup: bool = False):
 
     if clean:
         clean_wheel = True
@@ -501,6 +502,8 @@ def main(*,
                                          project_dir / requirements_filename,
                                          no_venv)
 
+    if only_run_setup:
+        return
     # Ensure base TRT is installed (check inside the venv)
     try:
         check_output([str(venv_python), "-m", "pip", "show", "tensorrt"])
@@ -1094,6 +1097,9 @@ def add_arguments(parser: ArgumentParser):
         "--nvrtc_dynamic_linking",
         action="store_true",
         help="Link against dynamic NVRTC libraries instead of static ones")
+    parser.add_argument("--only_run_setup",
+                        action="store_true",
+                        help="Only run the setup steps and exit")
 
 
 if __name__ == "__main__":
