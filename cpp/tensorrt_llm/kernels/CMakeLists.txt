@@ -35,6 +35,8 @@ list(FILTER SRC_CU EXCLUDE REGEX "selectiveScan/.*")
 list(FILTER SRC_CPP EXCLUDE REGEX "userbuffers/.*")
 list(FILTER SRC_CU EXCLUDE REGEX "userbuffers/.*")
 list(FILTER SRC_CU EXCLUDE REGEX "fusedLayernormKernels/.*")
+list(FILTER SRC_CPP EXCLUDE REGEX "tinygemm2/.*")
+list(FILTER SRC_CU EXCLUDE REGEX "tinygemm2/.*")
 
 function(filter_cuda_archs ARCH SOURCES_VAR)
   if(NOT "${ARCH}" IN_LIST CMAKE_CUDA_ARCHITECTURES_ORIG)
