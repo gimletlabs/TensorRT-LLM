@@ -56,6 +56,7 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
     int tp_rank,                         // for ALiBi
     bool unfuse_qkv_gemm,                // for AutoPP
     bool use_logn_scaling,               // for LognScaling
+    bool use_attention_sinks,            // for GPT-OSS attention sinks
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
     tensorrt_llm::kernels::AttentionMaskType mask_type, tensorrt_llm::kernels::BlockSparseParams block_sparse_params,
     bool paged_kv_cache, int tokens_per_block, nvinfer1::DataType type, int32_t max_context_length,
@@ -69,7 +70,7 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
         head_size, unidirectional, q_scaling, attn_logit_softcapping_scale, position_embedding_type,
         rotary_embedding_dim, rotary_embedding_base, rotary_embedding_scale_type, rotary_embedding_scale,
         rotary_embedding_short_m_scale, rotary_embedding_long_m_scale, rotary_embedding_max_positions,
-        rotary_embedding_original_max_positions, tp_size, tp_rank, unfuse_qkv_gemm, use_logn_scaling, context_fmha_type,
+        rotary_embedding_original_max_positions, tp_size, tp_rank, unfuse_qkv_gemm, use_logn_scaling, use_attention_sinks, context_fmha_type,
         kv_cache_quant_mode, remove_input_padding, mask_type, block_sparse_params, paged_kv_cache, tokens_per_block,
         type, max_context_length, qkv_bias_enabled, cross_attention, max_distance, pos_shift_enabled,
         dense_context_fmha, use_paged_context_fmha, use_fp8_context_fmha, has_full_attention_mask, use_cache,
@@ -119,6 +120,7 @@ std::string GPTAttentionPlugin::toString(IdxEntry const& entry) const
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(ROTARY_INV_FREQ);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(ROTARY_COS_SIN);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(ALIBI_SLOPES);
+        TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(ATTENTION_SINKS);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(RELATIVE_ATTENTION_BIAS);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(CROSS_KV);
         TLLM_GPT_ATTN_IDX_ENTRY_TO_STRING(CROSS_KV_LENGTH);
@@ -175,6 +177,7 @@ bool GPTAttentionPlugin::isEntryUsed(IdxEntry const& entry) const
     case IdxEntry::ROTARY_INV_FREQ: return isRoPE();
     case IdxEntry::ROTARY_COS_SIN: return isRoPE();
     case IdxEntry::ALIBI_SLOPES: return isALiBi();
+    case IdxEntry::ATTENTION_SINKS: return isAttentionSinks();
     case IdxEntry::RELATIVE_ATTENTION_BIAS: return isRelativePosition();
     case IdxEntry::CROSS_KV: return isCrossAttention();
     case IdxEntry::CROSS_KV_LENGTH: return isCrossAttention();
@@ -381,6 +384,12 @@ bool GPTAttentionPlugin::supportsFormatCombination(
     }
     else if (mFuseFp4Quant && pos == getIdx(IdxEntry::ATTENTION_OUTPUT_SF_SCALE))
     {
+        posCaseLine = __LINE__;
+        result = inOut[pos].type == nvinfer1::DataType::kFLOAT && inOut[pos].format == TensorFormat::kLINEAR;
+    }
+    else if (isEntryUsed(IdxEntry::ATTENTION_SINKS) && pos == getIdx(IdxEntry::ATTENTION_SINKS))
+    {
+        // Attention sinks must always be float32
         posCaseLine = __LINE__;
         result = inOut[pos].type == nvinfer1::DataType::kFLOAT && inOut[pos].format == TensorFormat::kLINEAR;
     }
@@ -931,6 +940,9 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     }
 
     T const* alibi_slopes = isALiBi() ? static_cast<T const*>(inputs[getIdx(IdxEntry::ALIBI_SLOPES)]) : nullptr;
+    float const* attention_sinks = isEntryUsed(IdxEntry::ATTENTION_SINKS)
+        ? static_cast<float const*>(inputs[getIdx(IdxEntry::ATTENTION_SINKS)])
+        : nullptr;
 
     int const* spec_decoding_packed_mask = nullptr;
     int const* spec_decoding_position_offsets = nullptr;
@@ -990,6 +1002,7 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
     common_enqueue_params.attention_output_orig_quant = attention_output_orig_quant;
     common_enqueue_params.attention_output_sf_scale = attention_output_sf_scale;
     common_enqueue_params.alibi_slopes = alibi_slopes;
+    common_enqueue_params.attention_sinks = attention_sinks;
     common_enqueue_params.context_buf = context_buf_;
     common_enqueue_params.context_buf_sf = context_buf_sf_;
     common_enqueue_params.key_value_cache = key_value_cache;
@@ -1326,6 +1339,7 @@ IPluginV2* GPTAttentionPluginCreator::createPlugin(char const* name, PluginField
             static_cast<int32_t>(p.getScalar<int32_t>("tp_rank").value()),
             static_cast<bool>(p.getScalar<int32_t>("unfuse_qkv_gemm").value()),
             static_cast<bool>(p.getScalar<int32_t>("use_logn_scaling").value()),
+            static_cast<bool>(p.getScalar<int32_t>("use_attention_sinks").value()),
             static_cast<ContextFMHAType>(p.getScalar<int32_t>("context_fmha_type").value()),
             p.getScalar<int32_t>("kv_cache_quant_mode").value(),
             static_cast<bool>(p.getScalar<int32_t>("remove_input_padding").value()),
