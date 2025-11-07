@@ -70,13 +70,14 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
         head_size, unidirectional, q_scaling, attn_logit_softcapping_scale, position_embedding_type,
         rotary_embedding_dim, rotary_embedding_base, rotary_embedding_scale_type, rotary_embedding_scale,
         rotary_embedding_short_m_scale, rotary_embedding_long_m_scale, rotary_embedding_max_positions,
-        rotary_embedding_original_max_positions, tp_size, tp_rank, unfuse_qkv_gemm, use_logn_scaling, use_attention_sinks, context_fmha_type,
-        kv_cache_quant_mode, remove_input_padding, mask_type, block_sparse_params, paged_kv_cache, tokens_per_block,
-        type, max_context_length, qkv_bias_enabled, cross_attention, max_distance, pos_shift_enabled,
-        dense_context_fmha, use_paged_context_fmha, use_fp8_context_fmha, has_full_attention_mask, use_cache,
-        is_spec_decoding_enabled, spec_decoding_is_generation_length_variable, spec_decoding_max_generation_length,
-        is_mla_enabled, q_lora_rank, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, fuse_fp4_quant,
-        skip_attn, cp_size, cp_rank, cp_group)
+        rotary_embedding_original_max_positions, tp_size, tp_rank, unfuse_qkv_gemm, use_logn_scaling,
+        use_attention_sinks, context_fmha_type, kv_cache_quant_mode, remove_input_padding, mask_type,
+        block_sparse_params, paged_kv_cache, tokens_per_block, type, max_context_length, qkv_bias_enabled,
+        cross_attention, max_distance, pos_shift_enabled, dense_context_fmha, use_paged_context_fmha,
+        use_fp8_context_fmha, has_full_attention_mask, use_cache, is_spec_decoding_enabled,
+        spec_decoding_is_generation_length_variable, spec_decoding_max_generation_length, is_mla_enabled, q_lora_rank,
+        kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, fuse_fp4_quant, skip_attn, cp_size, cp_rank,
+        cp_group)
 {
     TLLM_CHECK_WITH_INFO(
         !is_mla_enabled, "GPTAttentionPlugin no longer supports MLA. Please use the PyTorch workflow instead.");

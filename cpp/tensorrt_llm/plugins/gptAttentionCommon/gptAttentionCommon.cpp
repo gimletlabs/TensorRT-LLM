@@ -34,9 +34,9 @@ GPTAttentionPluginCommon::GPTAttentionPluginCommon(int layer_idx, int num_heads,
     float rotary_embedding_base, tensorrt_llm::kernels::RotaryScalingType rotary_embedding_scale_type,
     float rotary_embedding_scale, float rotary_embedding_short_m_scale, float rotary_embedding_long_m_scale,
     int rotary_embedding_max_positions, int rotary_embedding_original_max_positions, int tp_size,
-    int tp_rank,           // for ALiBi
-    bool unfuse_qkv_gemm,  // for AutoPP
-    bool use_logn_scaling, // for LognScaling
+    int tp_rank,              // for ALiBi
+    bool unfuse_qkv_gemm,     // for AutoPP
+    bool use_logn_scaling,    // for LognScaling
     bool use_attention_sinks, // for GPT-OSS attention sinks
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
     tensorrt_llm::kernels::AttentionMaskType mask_type, tensorrt_llm::kernels::BlockSparseParams block_sparse_params,
@@ -219,8 +219,8 @@ size_t GPTAttentionPluginCommon::getCommonSerializationSize() const noexcept
         + sizeof(mTokensPerBlock) + sizeof(mType) + sizeof(mMaxContextLength) + sizeof(mQKVBiasEnabled)
         + sizeof(mCrossAttention) + sizeof(mMaxDistance) + sizeof(mPosShiftEnabled) + sizeof(mDenseContextFMHA)
         + sizeof(mPagedContextFMHA) + sizeof(mFP8ContextFMHA) + sizeof(mFP8AttenOutput) + sizeof(mHasFullAttentionMask)
-        + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mUseAttentionSinks) + sizeof(mIsSpecDecodingEnabled)
-        + sizeof(mUseSpecDecoding) + sizeof(mSpecDecodingIsGenerationLengthVariable)
+        + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mUseAttentionSinks)
+        + sizeof(mIsSpecDecodingEnabled) + sizeof(mUseSpecDecoding) + sizeof(mSpecDecodingIsGenerationLengthVariable)
         + sizeof(mSpecDecodingMaxGenerationLength) + sizeof(mNbMultiBlockSemaphores) + sizeof(mIsMLAEnabled)
         + sizeof(mMLAParams) + sizeof(mFuseFp4Quant) + sizeof(mSkipAttn)
         + sizeof(uint32_t) // size of DecoderXQARunnerResource buffer.
