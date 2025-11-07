@@ -219,7 +219,7 @@ size_t GPTAttentionPluginCommon::getCommonSerializationSize() const noexcept
         + sizeof(mTokensPerBlock) + sizeof(mType) + sizeof(mMaxContextLength) + sizeof(mQKVBiasEnabled)
         + sizeof(mCrossAttention) + sizeof(mMaxDistance) + sizeof(mPosShiftEnabled) + sizeof(mDenseContextFMHA)
         + sizeof(mPagedContextFMHA) + sizeof(mFP8ContextFMHA) + sizeof(mFP8AttenOutput) + sizeof(mHasFullAttentionMask)
-        + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mIsSpecDecodingEnabled)
+        + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mUseAttentionSinks) + sizeof(mIsSpecDecodingEnabled)
         + sizeof(mUseSpecDecoding) + sizeof(mSpecDecodingIsGenerationLengthVariable)
         + sizeof(mSpecDecodingMaxGenerationLength) + sizeof(mNbMultiBlockSemaphores) + sizeof(mIsMLAEnabled)
         + sizeof(mMLAParams) + sizeof(mFuseFp4Quant) + sizeof(mSkipAttn)
@@ -253,6 +253,7 @@ void GPTAttentionPluginCommon::serializeCommon(void* buffer) const noexcept
     write(d, mTpRank);
     write(d, mUnfuseQkvGemm);
     write(d, mUseLognScaling);
+    write(d, mUseAttentionSinks);
     write(d, mEnableContextFMHA);
     write(d, mFMHAForceFP32Acc);
     write(d, mMultiBlockMode);
