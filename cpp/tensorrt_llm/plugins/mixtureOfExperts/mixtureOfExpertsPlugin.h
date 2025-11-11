@@ -305,6 +305,11 @@ private:
         return mQuantMode.hasNvfp4();
     }
 
+    bool hasW4a16Mxfp4() const
+    {
+        return mQuantMode.hasW4a16Mxfp4();
+    }
+
     bool hasGroupwiseIntQuantScales() const
     {
         return mGroupwiseQuantAlgo > 0;
@@ -510,9 +515,29 @@ private:
         return getHostContextLengthIndex() + useSideStream();
     }
 
+    bool isSwigluBias() const
+    {
+        return mActivationType == ActivationType::SwigluBias;
+    }
+
+    IndexType getSwigluAlphaIndex() const
+    {
+        return getInputDummyTensorIndex() + isSwigluBias();
+    }
+
+    IndexType getSwigluBetaIndex() const
+    {
+        return getSwigluAlphaIndex() + isSwigluBias();
+    }
+
+    IndexType getSwigluLimitIndex() const
+    {
+        return getSwigluBetaIndex() + isSwigluBias();
+    }
+
     IndexType getNbInputs() const
     {
-        return getInputDummyTensorIndex() + 1;
+        return getSwigluLimitIndex() + 1;
     }
 
     // Outputs
@@ -532,6 +557,8 @@ private:
     int getGemmShapeInnerDimIndex() const
     {
         // In weight only mode the shape is transposed
+        // NOTE(philkuz@gimlet) This is a special case for INT4 types, we don't need
+        // this transpose for MXFP4 support.
         return hasExpertIntQuantScales() ? 1 : 2;
     }
 
@@ -541,7 +568,15 @@ private:
     int getGemmShapeOuterDimIndex() const
     {
         // In weight only mode the shape is transposed
+        // NOTE(philkuz@gimlet) This is a special case for INT4 types, we don't need
+        // this transpose for MXFP4 support.
         return hasExpertIntQuantScales() ? 2 : 1;
+    }
+
+    bool has4bitWeights() const
+    {
+        return mQuantMode.hasInt4Weights() || mQuantMode.hasNvfp4() || mQuantMode.hasW4a16Mxfp4()
+            || mQuantMode.hasW4a8Mxfp4Fp8() || mQuantMode.hasW4a8Mxfp4Mxfp8();
     }
 
     /**
@@ -549,13 +584,21 @@ private:
      */
     std::pair<int, int> getWeightPackedElements() const
     {
-        if (mGroupwiseQuantAlgo == 0)
+        if (mGroupwiseQuantAlgo == 0 && mQuantMode.hasInt4Weights())
         {
-            return {1, mQuantMode.hasInt4Weights() ? 2 : 1};
+            return {1, 2};
+        }
+        else if (mWeightType == nvinfer1::DataType::kFP4)
+        {
+            return {2, 1};
+        }
+        else if (mGroupwiseQuantAlgo > 0)
+        {
+            return {1, 4};
         }
         else
         {
-            return {1, 4};
+            return {1, 1};
         }
     }
 };
