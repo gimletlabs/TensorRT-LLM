@@ -305,6 +305,16 @@ private:
         return mQuantMode.hasNvfp4();
     }
 
+    bool hasW4a16Mxfp4() const
+    {
+        return mQuantMode.hasW4a16Mxfp4();
+    }
+
+    bool hasSwigluBias() const
+    {
+        return mActivationType == ActivationType::SwigluBias;
+    }
+
     bool hasGroupwiseIntQuantScales() const
     {
         return mGroupwiseQuantAlgo > 0;
@@ -510,9 +520,38 @@ private:
         return getHostContextLengthIndex() + useSideStream();
     }
 
+    /*
+     * MXFP4 Weight scales for expert fc1 and fc2.
+     * Should be F8E8M0 encoded as INT8.
+     */
+    IndexType getExpertMxfp4Scale1Index() const
+    {
+        return getInputDummyTensorIndex() + hasW4a16Mxfp4();
+    }
+
+    IndexType getExpertMxfp4Scale2Index() const
+    {
+        return getExpertMxfp4Scale1Index() + hasW4a16Mxfp4();
+    }
+
+    IndexType getSwigluAlphaIndex() const
+    {
+        return getExpertMxfp4Scale2Index() + hasSwigluBias();
+    }
+
+    IndexType getSwigluBetaIndex() const
+    {
+        return getSwigluAlphaIndex() + hasSwigluBias();
+    }
+
+    IndexType getSwigluLimitIndex() const
+    {
+        return getSwigluBetaIndex() + hasSwigluBias();
+    }
+
     IndexType getNbInputs() const
     {
-        return getInputDummyTensorIndex() + 1;
+        return getSwigluLimitIndex() + 1;
     }
 
     // Outputs
@@ -532,6 +571,8 @@ private:
     int getGemmShapeInnerDimIndex() const
     {
         // In weight only mode the shape is transposed
+        // NOTE(philkuz@gimlet) This is a special case for INT4 types, we don't need
+        // this transpose for MXFP4 support.
         return hasExpertIntQuantScales() ? 1 : 2;
     }
 
@@ -541,20 +582,40 @@ private:
     int getGemmShapeOuterDimIndex() const
     {
         // In weight only mode the shape is transposed
+        // NOTE(philkuz@gimlet) This is a special case for INT4 types, we don't need
+        // this transpose for MXFP4 support.
         return hasExpertIntQuantScales() ? 2 : 1;
     }
 
     /**
      * Get quantization dimension scaling factor
+     * Returns the number of elements packed per {inner, outer} dimension in the packed matmul weight.
      */
     std::pair<int, int> getWeightPackedElements() const
     {
         if (mGroupwiseQuantAlgo == 0)
         {
-            return {1, mQuantMode.hasInt4Weights() ? 2 : 1};
+            if (mQuantMode.hasInt4Weights())
+            {
+                // INT4 weights are packed in the "outer-dimension" of the weight tensor.
+                return {1, 2};
+            }
+            else if (mQuantMode.hasW4a16Mxfp4())
+            {
+                // MxFP4 weights are packed in the "inner-dimension" of the weight tensor instead of the
+                // "outer-dimension".
+                return {2, 1};
+            }
+            else
+            {
+                return {1, 1};
+            }
         }
         else
         {
+            // Groupwise attention weights are packed in the "outer-dimension" of the weight tensor.
+            // NOTE(philkuz@gimlet): we don't hit this path for MXFP4 weights but we keep it here for backwards
+            // compatibility.
             return {1, 4};
         }
     }
