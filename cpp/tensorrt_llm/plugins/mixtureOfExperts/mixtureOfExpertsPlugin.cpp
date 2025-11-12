@@ -402,22 +402,22 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
 
     if (pos == getExpertWeights1Index() || pos == getExpertWeights2Index())
     {
-        // FP4 and INT4 weights must be packed as INT8 to the plugin because
-        // TensorRT does not support these types.
-        if (mWeightType == nvinfer1::DataType::kINT4 || mWeightType == nvinfer1::DataType::kFP4)
+        if (mGroupwiseQuantAlgo == 0)
         {
-            return inOut[pos].type == nvinfer1::DataType::kINT8;
+            // FP4 and INT4 weights must be packed as INT8 to the plugin because
+            // TensorRT does not support these types.
+            if (mWeightType == nvinfer1::DataType::kINT4 || mWeightType == nvinfer1::DataType::kFP4)
+            {
+                return inOut[pos].type == nvinfer1::DataType::kINT8;
+            }
+            return inOut[pos].type == mWeightType;
         }
         // Special case for groupwise attention that is not a sub-8bit type.
         // NOTE(philkuz@gimlet): we don't hit this path but we keep it here for
         // backwards compatibility.
-        else if (mGroupwiseQuantAlgo > 0)
-        {
-            return inOut[pos].type == mOutputType;
-        }
         else
         {
-            return inOut[pos].type == mWeightType;
+            return inOut[pos].type == mOutputType;
         }
     }
     else if (pos == getTokenSelectedExpertsIndex())
@@ -472,12 +472,6 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     else if (hasExpertPrequantScales() && getExpertPrequantScales1Index() <= pos
         && pos <= getExpertPrequantScales2Index())
     {
-        // If this plugin does w4a16mxfp4 quantization, we expect an f8e8m0 scale,
-        // but we pack it as INT8 to the plugin because onnx-trt does not support f8e8m0.
-        if (hasW4a16Mxfp4())
-        {
-            return inOut[pos].type == nvinfer1::DataType::kINT8;
-        }
         return inOut[pos].type == mOutputType;
     }
     else if (hasGroupwiseFp8Alpha() && getExpertFp8Alpha1Index() <= pos && pos <= getExpertFp8Alpha2Index())
@@ -512,7 +506,12 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     {
         return inOut[pos].type == mOutputType;
     }
-    else if (isSwigluBias() && pos >= getSwigluAlphaIndex() && pos <= getSwigluLimitIndex())
+    else if (hasW4a16Mxfp4() && getExpertMxfp4Scale1Index() <= pos && pos <= getExpertMxfp4Scale2Index())
+    {
+        // We expect an f8e8m0 scale but we pack it as INT8 to the plugin because onnx-trt does not support f8e8m0.
+        return inOut[pos].type == nvinfer1::DataType::kINT8;
+    }
+    else if (hasSwigluBias() && pos >= getSwigluAlphaIndex() && pos <= getSwigluLimitIndex())
     {
         return inOut[pos].type == nvinfer1::DataType::kFLOAT;
     }
@@ -956,8 +955,8 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
     }
     else if (hasW4a16Mxfp4())
     {
-        auto fc1_weight_scales = static_cast<void const*>(inputs[getExpertPrequantScales1Index()]);
-        auto fc2_weight_scales = static_cast<void const*>(inputs[getExpertPrequantScales2Index()]);
+        auto fc1_weight_scales = static_cast<void const*>(inputs[getExpertMxfp4Scale1Index()]);
+        auto fc2_weight_scales = static_cast<void const*>(inputs[getExpertMxfp4Scale2Index()]);
         quant_params = QuantParams::GroupWise(mGroupSize, fc1_weight_scales, fc2_weight_scales);
     }
 
@@ -990,7 +989,7 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
     mMOERunner->setTactic(gemm1, gemm2);
 
     // Build activation params with optional swiglu parameters
-    ActivationParams activation_params = isSwigluBias()
+    ActivationParams activation_params = hasSwigluBias()
         ? ActivationParams(mActivationType, static_cast<float const*>(inputs[getSwigluAlphaIndex()]),
             static_cast<float const*>(inputs[getSwigluBetaIndex()]),
             static_cast<float const*>(inputs[getSwigluLimitIndex()]))

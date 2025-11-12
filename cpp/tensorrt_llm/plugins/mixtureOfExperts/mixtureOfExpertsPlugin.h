@@ -310,6 +310,11 @@ private:
         return mQuantMode.hasW4a16Mxfp4();
     }
 
+    bool hasSwigluBias() const
+    {
+        return mActivationType == ActivationType::SwigluBias;
+    }
+
     bool hasGroupwiseIntQuantScales() const
     {
         return mGroupwiseQuantAlgo > 0;
@@ -515,24 +520,33 @@ private:
         return getHostContextLengthIndex() + useSideStream();
     }
 
-    bool isSwigluBias() const
+    /*
+     * MXFP4 Weight scales for expert fc1 and fc2.
+     * Should be F8E8M0 encoded as INT8.
+     */
+    IndexType getExpertMxfp4Scale1Index() const
     {
-        return mActivationType == ActivationType::SwigluBias;
+        return getInputDummyTensorIndex() + hasW4a16Mxfp4();
+    }
+
+    IndexType getExpertMxfp4Scale2Index() const
+    {
+        return getExpertMxfp4Scale1Index() + hasW4a16Mxfp4();
     }
 
     IndexType getSwigluAlphaIndex() const
     {
-        return getInputDummyTensorIndex() + isSwigluBias();
+        return getExpertMxfp4Scale2Index() + hasSwigluBias();
     }
 
     IndexType getSwigluBetaIndex() const
     {
-        return getSwigluAlphaIndex() + isSwigluBias();
+        return getSwigluAlphaIndex() + hasSwigluBias();
     }
 
     IndexType getSwigluLimitIndex() const
     {
-        return getSwigluBetaIndex() + isSwigluBias();
+        return getSwigluBetaIndex() + hasSwigluBias();
     }
 
     IndexType getNbInputs() const
@@ -573,32 +587,36 @@ private:
         return hasExpertIntQuantScales() ? 2 : 1;
     }
 
-    bool has4bitWeights() const
-    {
-        return mQuantMode.hasInt4Weights() || mQuantMode.hasNvfp4() || mQuantMode.hasW4a16Mxfp4()
-            || mQuantMode.hasW4a8Mxfp4Fp8() || mQuantMode.hasW4a8Mxfp4Mxfp8();
-    }
-
     /**
      * Get quantization dimension scaling factor
+     * Returns the number of elements packed per {inner, outer} dimension in the packed matmul weight.
      */
     std::pair<int, int> getWeightPackedElements() const
     {
-        if (mGroupwiseQuantAlgo == 0 && mQuantMode.hasInt4Weights())
+        if (mGroupwiseQuantAlgo == 0)
         {
-            return {1, 2};
-        }
-        else if (mWeightType == nvinfer1::DataType::kFP4)
-        {
-            return {2, 1};
-        }
-        else if (mGroupwiseQuantAlgo > 0)
-        {
-            return {1, 4};
+            if (mQuantMode.hasInt4Weights())
+            {
+                // INT4 weights are packed in the "outer-dimension" of the weight tensor.
+                return {1, 2};
+            }
+            else if (mQuantMode.hasW4a16Mxfp4())
+            {
+                // MxFP4 weights are packed in the "inner-dimension" of the weight tensor instead of the
+                // "outer-dimension".
+                return {2, 1};
+            }
+            else
+            {
+                return {1, 1};
+            }
         }
         else
         {
-            return {1, 1};
+            // Groupwise attention weights are packed in the "outer-dimension" of the weight tensor.
+            // NOTE(philkuz@gimlet): we don't hit this path for MXFP4 weights but we keep it here for backwards
+            // compatibility.
+            return {1, 4};
         }
     }
 };
