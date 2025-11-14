@@ -125,7 +125,7 @@ public:
         nvinfer1::DataType output_type, tensorrt_llm::common::QuantMode quant_mode, bool use_final_scales,
         bool use_bias, int tp_size, int tp_rank, int ep_size, int ep_rank, bool force_determinism, int side_stream_id,
         MixtureOfExpertsPluginProfilerPtr gemm_profiler_ptr, bool use_lora, nvinfer1::DataType lora_type,
-        LoraPluginProfilerPtr lora_profiler, int max_low_rank);
+        LoraPluginProfilerPtr lora_profiler, int max_low_rank, int expert_unpadded_hidden_size = 0);
     MixtureOfExpertsPlugin(void const* data, size_t length, MixtureOfExpertsPluginProfilerPtr gemm_profiler_ptr,
         LoraPluginProfilerPtr lora_profiler);
     MixtureOfExpertsPlugin(MixtureOfExpertsPlugin const&);
@@ -220,6 +220,8 @@ private:
 
     cudaEvent_t mMemcpyEvent;
     nvinfer1::pluginInternal::SideStream* mSideStreamPtr;
+
+    int64_t mExpertUnpaddedHiddenSize{};
 
     // The below are not serialised
     std::string const mLayerName{};
