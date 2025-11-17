@@ -218,10 +218,15 @@ private:
     std::vector<int32_t> mLoraExpandFC2Ranks{};
     std::vector<int32_t> mLoraExpandGatedRanks{};
 
+    // The size of the hidden state after padding has been removed.
+    // The plugin will slice the output hidden state dim to this size
+    // to ignore the calculations that resulted from padding.
+    // We only need this for the hidden state not the intermediate state,
+    // because the intermediate dimension is kept internal to the MLP calculation.
+    int64_t mExpertUnpaddedHiddenSize{};
+
     cudaEvent_t mMemcpyEvent;
     nvinfer1::pluginInternal::SideStream* mSideStreamPtr;
-
-    int64_t mExpertUnpaddedHiddenSize{};
 
     // The below are not serialised
     std::string const mLayerName{};
