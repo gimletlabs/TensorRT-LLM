@@ -125,7 +125,7 @@ public:
         nvinfer1::DataType output_type, tensorrt_llm::common::QuantMode quant_mode, bool use_final_scales,
         bool use_bias, int tp_size, int tp_rank, int ep_size, int ep_rank, bool force_determinism, int side_stream_id,
         MixtureOfExpertsPluginProfilerPtr gemm_profiler_ptr, bool use_lora, nvinfer1::DataType lora_type,
-        LoraPluginProfilerPtr lora_profiler, int max_low_rank);
+        LoraPluginProfilerPtr lora_profiler, int max_low_rank, int expert_unpadded_hidden_size = 0);
     MixtureOfExpertsPlugin(void const* data, size_t length, MixtureOfExpertsPluginProfilerPtr gemm_profiler_ptr,
         LoraPluginProfilerPtr lora_profiler);
     MixtureOfExpertsPlugin(MixtureOfExpertsPlugin const&);
@@ -217,6 +217,13 @@ private:
     std::vector<int32_t> mLoraExpandFC1Ranks{};
     std::vector<int32_t> mLoraExpandFC2Ranks{};
     std::vector<int32_t> mLoraExpandGatedRanks{};
+
+    // The size of the hidden state after padding has been removed.
+    // The plugin will slice the output hidden state dim to this size
+    // to ignore the calculations that resulted from padding.
+    // We only need this for the hidden state not the intermediate state,
+    // because the intermediate dimension is kept internal to the MLP calculation.
+    int64_t mExpertUnpaddedHiddenSize{};
 
     cudaEvent_t mMemcpyEvent;
     nvinfer1::pluginInternal::SideStream* mSideStreamPtr;
