@@ -317,6 +317,16 @@ private:
         return mQuantMode.hasW4a16Mxfp4();
     }
 
+    bool hasW4a8Mxfp4Mxfp8() const
+    {
+        return mQuantMode.hasW4a8Mxfp4Mxfp8();
+    }
+
+    bool hasMxfp4Weights() const
+    {
+        return hasW4a16Mxfp4() || hasW4a8Mxfp4Mxfp8();
+    }
+
     bool hasSwigluBias() const
     {
         return mActivationType == ActivationType::SwigluBias;
@@ -533,17 +543,22 @@ private:
      */
     IndexType getExpertMxfp4Scale1Index() const
     {
-        return getInputDummyTensorIndex() + hasW4a16Mxfp4();
+        return getInputDummyTensorIndex() + hasMxfp4Weights();
     }
 
     IndexType getExpertMxfp4Scale2Index() const
     {
-        return getExpertMxfp4Scale1Index() + hasW4a16Mxfp4();
+        return getExpertMxfp4Scale1Index() + hasMxfp4Weights();
+    }
+
+    IndexType getMxFp8InputScaleIndex() const
+    {
+        return getExpertMxfp4Scale2Index() + hasW4a8Mxfp4Mxfp8();
     }
 
     IndexType getSwigluAlphaIndex() const
     {
-        return getExpertMxfp4Scale2Index() + hasSwigluBias();
+        return getMxFp8InputScaleIndex() + hasSwigluBias();
     }
 
     IndexType getSwigluBetaIndex() const
@@ -607,7 +622,7 @@ private:
                 // INT4 weights are packed in the "outer-dimension" of the weight tensor.
                 return {1, 2};
             }
-            else if (mQuantMode.hasW4a16Mxfp4())
+            else if (hasMxfp4Weights())
             {
                 // MxFP4 weights are packed in the "inner-dimension" of the weight tensor instead of the
                 // "outer-dimension".

@@ -267,7 +267,7 @@ void MixtureOfExpertsPlugin::init()
         "MoE FP4 is only supported on architecture SM100 or later");
 
     // MXFP4 weights require alignment to a multiple of 128.
-    if (hasW4a16Mxfp4())
+    if (hasMxfp4Weights())
     {
         TLLM_CHECK_WITH_INFO(mExpertHiddenSize % 128 == 0,
             "hidden_size must be divisible by 128 for MXFP4 weights, got %d", static_cast<int>(mExpertHiddenSize));
@@ -322,6 +322,12 @@ void MixtureOfExpertsPlugin::init()
     {
         mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<__nv_bfloat16, __nv_fp4_e2m1>>();
     }
+#ifdef ENABLE_FP8
+    else if (mType == DataType::kFP8 && mWeightType == DataType::kFP4 && mOutputType == DataType::kBF16)
+    {
+        mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<__nv_fp8_e4m3, __nv_fp4_e2m1, __nv_bfloat16>>();
+    }
+#endif
 #endif
 #ifdef ENABLE_FP8
     else if (mType == DataType::kFP8 && mWeightType == DataType::kINT4 && mOutputType == DataType::kBF16)
@@ -529,7 +535,18 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     {
         return inOut[pos].type == mOutputType;
     }
-    else if (hasW4a16Mxfp4() && getExpertMxfp4Scale1Index() <= pos && pos <= getExpertMxfp4Scale2Index())
+    else if (hasW4a8Mxfp4Mxfp8() && pos == getMxFp8InputScaleIndex())
+    {
+        // TensorRT does not support F8E8M0 types directly, so we encode it as INT8 to the plugin.
+        return inOut[pos].type == nvinfer1::DataType::kINT8;
+    }
+    else if (hasW4a8Mxfp4Mxfp8() && pos == getInputTensorIndex())
+    {
+        // Even though the activations are treated as FP8 for MXFP4 with MXFP8 activations, they must be passed as INT8
+        // to the plugin because TensorRT does not support mixing FP8 and INT8 input types.
+        return inOut[pos].type == DataType::kINT8;
+    }
+    else if (hasMxfp4Weights() && getExpertMxfp4Scale1Index() <= pos && pos <= getExpertMxfp4Scale2Index())
     {
         // We expect an f8e8m0 scale but we pack it as INT8 to the plugin because onnx-trt does not support f8e8m0.
         return inOut[pos].type == nvinfer1::DataType::kINT8;
@@ -1019,8 +1036,8 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
         : ActivationParams(mActivationType);
 
 #ifdef USING_OSS_CUTLASS_MOE_GEMM
-    mMOERunner->runMoe(inputs[getInputTensorIndex()], nullptr, true,
-        static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
+    mMOERunner->runMoe(inputs[getInputTensorIndex()], hasW4a8Mxfp4Mxfp8() ? inputs[getMxFp8InputScaleIndex()] : nullptr,
+        true, static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
         inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr, activation_params,
         inputs[getExpertWeights2Index()], hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens,
@@ -1031,8 +1048,8 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
         /*enable_alltoall=*/false, hasLora(), lora_params, /*use_deepseek_fp8_block_scale=*/false,
         /*min_latency_mode=*/false, min_latency_params, stream);
 #else
-    mMOERunner->runMoe(inputs[getInputTensorIndex()], nullptr, true,
-        static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
+    mMOERunner->runMoe(inputs[getInputTensorIndex()], hasW4a8Mxfp4Mxfp8() ? inputs[getMxFp8InputScaleIndex()] : nullptr,
+        true, static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
         inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr, activation_params,
         inputs[getExpertWeights2Index()], hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens,
@@ -1158,6 +1175,7 @@ MixtureOfExpertsPluginCreator::MixtureOfExpertsPluginCreator()
     mPluginAttributes.emplace_back(nvinfer1::PluginField("quant_mode", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("use_final_scales", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("use_bias", nullptr, PluginFieldType::kINT32));
+    mPluginAttributes.emplace_back(nvinfer1::PluginField("output_type_id", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("tp_size", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("tp_rank", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("ep_size", nullptr, PluginFieldType::kINT32));
