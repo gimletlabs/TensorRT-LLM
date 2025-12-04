@@ -999,6 +999,23 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
         auto fc2_weight_scales = static_cast<void const*>(inputs[getExpertMxfp4Scale2Index()]);
         quant_params = QuantParams::GroupWise(mGroupSize, fc1_weight_scales, fc2_weight_scales);
     }
+    else if (hasW4a8Mxfp4Mxfp8())
+    {
+        // Extract weight block scales from INT8 inputs (cast to MXFPXElementSF*)
+        auto fc1_weight_block_scales = static_cast<TmaWarpSpecializedGroupedGemmInput::MXFPXElementSF const*>(
+            inputs[getExpertMxfp4Scale1Index()]);
+        auto fc2_weight_block_scales = static_cast<TmaWarpSpecializedGroupedGemmInput::MXFPXElementSF const*>(
+            inputs[getExpertMxfp4Scale2Index()]);
+
+        // Create fake global scale buffers filled with 1.0f (similar to W4A16 approach)
+        // Global scales are per-expert, so we need mNumExperts / ep_size floats for each
+        auto const experts_per_node = mNumExperts / mParallelismConfig.ep_size;
+        std::vector<float> fc1_fake_global_scales(experts_per_node, 1.0f);
+        std::vector<float> fc2_fake_global_scales(experts_per_node, 1.0f);
+
+        quant_params = QuantParams::MXFP8MXFP4(fc1_weight_block_scales, fc1_fake_global_scales.data(),
+            fc2_weight_block_scales, fc2_fake_global_scales.data());
+    }
 
     LoraParams lora_params{};
 
