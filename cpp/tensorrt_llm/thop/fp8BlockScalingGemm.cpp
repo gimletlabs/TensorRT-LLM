@@ -213,8 +213,6 @@ torch::Tensor& fp8_block_scale_gemm_blackwell_out(torch::Tensor const& mat1, tor
 
     tensorrt_llm::kernels::TrtllmGenGemmRunner runner(options);
 
-    TORCH_CHECK(workspace != nullptr, "Workspace must be provided for Blackwell GEMM");
-
     runner.run(m, n, k, mat1.const_data_ptr(), mat1ScalePtr, mat2.const_data_ptr(), mat2ScalePtr, out.data_ptr(),
         /* scaleC */ nullptr, outScalePtr, workspace, stream.stream(), mat1.get_device());
 
