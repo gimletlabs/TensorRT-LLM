@@ -27,8 +27,8 @@ TRTLLM_NAMESPACE_BEGIN
 namespace torch_ext
 {
 template <bool DoSoftmaxBeforeTopK>
-std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
-    th::Tensor const& router_logits, int64_t topk, c10::optional<at::ScalarType> output_dtype)
+void custom_moe_routing_op_out(th::Tensor const& router_logits, int64_t topk,
+    c10::optional<at::ScalarType> output_dtype, th::Tensor& topk_indices_out, th::Tensor& topk_values_out)
 {
     auto data_type = router_logits.scalar_type();
     auto input_size = router_logits.sizes();
@@ -37,15 +37,20 @@ std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
     TORCH_CHECK(input_size.size() == 2, "router_logits must be a 2D Tensor");
     TORCH_CHECK(topk <= 8, "topk should be smaller than or equal to 8 for now"); //@todo: remove this restriction later
     TORCH_CHECK(num_experts <= 128, "expert number should be smaller than or equal to 128 for now");
+    TORCH_CHECK(topk_indices_out.scalar_type() == torch::kInt32, "topk_indices_out must be int32");
+    TORCH_CHECK(topk_indices_out.sizes() == torch::IntArrayRef({num_tokens, topk}),
+        "topk_indices_out must have shape [num_tokens, topk]");
 
     // Determine output data type
     at::ScalarType topk_values_dtype = output_dtype.value_or(torch::kFloat32);
     TORCH_CHECK(topk_values_dtype == torch::kFloat32 || topk_values_dtype == torch::kBFloat16,
         "output_dtype must be float32 or bfloat16");
-
-    auto opts = router_logits.options();
-    th::Tensor topk_values = th::empty({num_tokens, topk}, opts.dtype(topk_values_dtype));
-    th::Tensor topk_indices = th::empty({num_tokens, topk}, opts.dtype(torch::kInt32));
+    TORCH_CHECK(topk_values_out.scalar_type() == topk_values_dtype, "topk_values_out has incorrect dtype");
+    TORCH_CHECK(topk_values_out.sizes() == torch::IntArrayRef({num_tokens, topk}),
+        "topk_values_out must have shape [num_tokens, topk]");
+    TORCH_CHECK(router_logits.get_device() == topk_values_out.get_device()
+            && router_logits.get_device() == topk_indices_out.get_device(),
+        "router_logits, topk_indices_out, and topk_values_out must be on the same device");
 
     auto stream = at::cuda::getCurrentCUDAStream(router_logits.get_device());
 
@@ -57,15 +62,15 @@ std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
         {
             tk::invokeCustomMoeRouting<float, float, int32_t, DoSoftmaxBeforeTopK>(
                 reinterpret_cast<float*>(router_logits.mutable_data_ptr()),
-                reinterpret_cast<float*>(topk_values.mutable_data_ptr()), topk_indices.data_ptr<int32_t>(), num_tokens,
-                num_experts, topk, stream);
+                reinterpret_cast<float*>(topk_values_out.mutable_data_ptr()), topk_indices_out.data_ptr<int32_t>(),
+                num_tokens, num_experts, topk, stream);
         }
         else
         { // bfloat16 output
             tk::invokeCustomMoeRouting<float, __nv_bfloat16, int32_t, DoSoftmaxBeforeTopK>(
                 reinterpret_cast<float*>(router_logits.mutable_data_ptr()),
-                reinterpret_cast<__nv_bfloat16*>(topk_values.mutable_data_ptr()), topk_indices.data_ptr<int32_t>(),
-                num_tokens, num_experts, topk, stream);
+                reinterpret_cast<__nv_bfloat16*>(topk_values_out.mutable_data_ptr()),
+                topk_indices_out.data_ptr<int32_t>(), num_tokens, num_experts, topk, stream);
         }
         break;
     case torch::kBFloat16:
@@ -74,15 +79,15 @@ std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
         {
             tk::invokeCustomMoeRouting<__nv_bfloat16, float, int32_t, DoSoftmaxBeforeTopK>(
                 reinterpret_cast<__nv_bfloat16*>(router_logits.mutable_data_ptr()),
-                reinterpret_cast<float*>(topk_values.mutable_data_ptr()), topk_indices.data_ptr<int32_t>(), num_tokens,
-                num_experts, topk, stream);
+                reinterpret_cast<float*>(topk_values_out.mutable_data_ptr()), topk_indices_out.data_ptr<int32_t>(),
+                num_tokens, num_experts, topk, stream);
         }
         else
         { // bfloat16 output
             tk::invokeCustomMoeRouting<__nv_bfloat16, __nv_bfloat16, int32_t, DoSoftmaxBeforeTopK>(
                 reinterpret_cast<__nv_bfloat16*>(router_logits.mutable_data_ptr()),
-                reinterpret_cast<__nv_bfloat16*>(topk_values.mutable_data_ptr()), topk_indices.data_ptr<int32_t>(),
-                num_tokens, num_experts, topk, stream);
+                reinterpret_cast<__nv_bfloat16*>(topk_values_out.mutable_data_ptr()),
+                topk_indices_out.data_ptr<int32_t>(), num_tokens, num_experts, topk, stream);
         }
         break;
     case torch::kHalf:
@@ -91,15 +96,15 @@ std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
         {
             tk::invokeCustomMoeRouting<half, float, int32_t, DoSoftmaxBeforeTopK>(
                 reinterpret_cast<half*>(router_logits.mutable_data_ptr()),
-                reinterpret_cast<float*>(topk_values.mutable_data_ptr()), topk_indices.data_ptr<int32_t>(), num_tokens,
-                num_experts, topk, stream);
+                reinterpret_cast<float*>(topk_values_out.mutable_data_ptr()), topk_indices_out.data_ptr<int32_t>(),
+                num_tokens, num_experts, topk, stream);
         }
         else
         { // bfloat16 output
             tk::invokeCustomMoeRouting<half, __nv_bfloat16, int32_t, DoSoftmaxBeforeTopK>(
                 reinterpret_cast<half*>(router_logits.mutable_data_ptr()),
-                reinterpret_cast<__nv_bfloat16*>(topk_values.mutable_data_ptr()), topk_indices.data_ptr<int32_t>(),
-                num_tokens, num_experts, topk, stream);
+                reinterpret_cast<__nv_bfloat16*>(topk_values_out.mutable_data_ptr()),
+                topk_indices_out.data_ptr<int32_t>(), num_tokens, num_experts, topk, stream);
         }
         break;
     default:
@@ -107,6 +112,22 @@ std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
         throw std::invalid_argument("Invalid dtype, only supports float32, float16 and bfloat16");
         break;
     }
+}
+
+template <bool DoSoftmaxBeforeTopK>
+std::tuple<at::Tensor, at::Tensor> custom_moe_routing_op(
+    th::Tensor const& router_logits, int64_t topk, c10::optional<at::ScalarType> output_dtype)
+{
+    auto opts = router_logits.options();
+    auto input_size = router_logits.sizes();
+    int64_t num_tokens = input_size[0];
+
+    at::ScalarType topk_values_dtype = output_dtype.value_or(torch::kFloat32);
+    th::Tensor topk_values = th::empty({num_tokens, topk}, opts.dtype(topk_values_dtype));
+    th::Tensor topk_indices = th::empty({num_tokens, topk}, opts.dtype(torch::kInt32));
+
+    custom_moe_routing_op_out<DoSoftmaxBeforeTopK>(router_logits, topk, output_dtype, topk_indices, topk_values);
+
     return {topk_indices, topk_values};
 }
 
