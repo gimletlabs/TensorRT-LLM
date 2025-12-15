@@ -84,7 +84,7 @@ Fp8BlockScaleGemmRunnerPtr get_gemm_runner(at::ScalarType dtype_a, at::ScalarTyp
 
 // Output-accepting variants for plugin use
 torch::Tensor& fp8_block_scaling_gemm_ada_out(torch::Tensor const& mat1, torch::Tensor const& mat2,
-    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, void* workspace, torch::Tensor& out)
+    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, torch::Tensor& workspace, torch::Tensor& out)
 {
     check_input_dtypes(mat1, mat1Scale);
     check_input_dtypes(mat2, mat2Scale);
@@ -113,9 +113,9 @@ torch::Tensor& fp8_block_scaling_gemm_ada_out(torch::Tensor const& mat1, torch::
     float const* mat1ScalePtr = mat1Scale.data_ptr<float>();
     float const* mat2ScalePtr = mat2Scale.data_ptr<float>();
 
-    if (workspace)
+    if (workspace.defined() && workspace.numel() > 0)
     {
-        gemm_runner->configureWorkspace(static_cast<char*>(workspace));
+        gemm_runner->configureWorkspace(static_cast<char*>(workspace.data_ptr()));
     }
 
     gemm_runner->gemm(reinterpret_cast<__nv_fp8_e4m3*>(mat1.data_ptr()), k,
@@ -173,7 +173,7 @@ torch::Tensor& fp8_block_scale_gemm_rtx_6000_out(torch::Tensor const& mat1, torc
 }
 
 torch::Tensor& fp8_block_scaling_gemm_hopper_out(torch::Tensor const& mat1, torch::Tensor const& mat2,
-    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, void* workspace, torch::Tensor& out)
+    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, torch::Tensor& workspace, torch::Tensor& out)
 {
     check_input_dtypes(mat1, mat1Scale);
     check_input_dtypes(mat2, mat2Scale);
@@ -202,9 +202,9 @@ torch::Tensor& fp8_block_scaling_gemm_hopper_out(torch::Tensor const& mat1, torc
     float const* mat1ScalePtr = mat1Scale.data_ptr<float>();
     float const* mat2ScalePtr = mat2Scale.data_ptr<float>();
 
-    if (workspace)
+    if (workspace.defined() && workspace.numel() > 0)
     {
-        gemm_runner->configureWorkspace(static_cast<char*>(workspace));
+        gemm_runner->configureWorkspace(static_cast<char*>(workspace.data_ptr()));
     }
 
     gemm_runner->gemm(reinterpret_cast<__nv_fp8_e4m3*>(mat1.data_ptr()), k,
@@ -215,7 +215,7 @@ torch::Tensor& fp8_block_scaling_gemm_hopper_out(torch::Tensor const& mat1, torc
 }
 
 torch::Tensor& fp8_block_scale_gemm_blackwell_out(torch::Tensor const& mat1, torch::Tensor const& mat2,
-    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, void* workspace, torch::Tensor& out)
+    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, torch::Tensor& workspace, torch::Tensor& out)
 {
     TORCH_CHECK(mat1.scalar_type() == at::ScalarType::Float8_e4m3fn, "Matrix dtype must be FP8.");
     TORCH_CHECK(mat2.scalar_type() == at::ScalarType::Float8_e4m3fn, "Matrix dtype must be FP8.");
@@ -262,17 +262,22 @@ torch::Tensor& fp8_block_scale_gemm_blackwell_out(torch::Tensor const& mat1, tor
         .transposeMmaOutput = true};
 
     tensorrt_llm::kernels::TrtllmGenGemmRunner runner(options);
+    auto required_workspace_size = runner.getWorkspaceSizeInBytes(m, n, k);
+    if (required_workspace_size > 0)
+    {
+        TORCH_CHECK(
+            workspace.defined() && workspace.numel() >= required_workspace_size, "Workspace size is not enough");
+    }
 
-    TORCH_CHECK(workspace != nullptr, "Workspace must be provided for Blackwell GEMM");
-
+    void* workspace_ptr = workspace.defined() && workspace.numel() > 0 ? workspace.data_ptr() : nullptr;
     runner.run(m, n, k, mat1.const_data_ptr(), mat1ScalePtr, mat2.const_data_ptr(), mat2ScalePtr, out.data_ptr(),
-        /* scaleC */ nullptr, outScalePtr, workspace, stream.stream(), mat1.get_device());
+        /* scaleC */ nullptr, outScalePtr, workspace_ptr, stream.stream(), mat1.get_device());
 
     return out;
 }
 
 extern torch::Tensor& fp8_block_scaling_gemm_out(torch::Tensor const& mat1, torch::Tensor const& mat2,
-    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, void* workspace, torch::Tensor& out)
+    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, torch::Tensor& workspace, torch::Tensor& out)
 {
     auto const sm = tensorrt_llm::common::getSMVersion();
     switch (sm)
@@ -332,15 +337,9 @@ extern torch::Tensor fp8_block_scaling_gemm(torch::Tensor const& mat1, torch::Te
     // Allocate workspace if needed by the underlying architecture
     int64_t const workspaceSize = fp8_block_scaling_gemm_workspace_size(
         static_cast<int32_t>(m), static_cast<int32_t>(n), static_cast<int32_t>(k));
-    at::Tensor workspace;
-    void* workspacePtr = nullptr;
-    if (workspaceSize > 0)
-    {
-        workspace = at::detail::empty_cuda({workspaceSize}, at::ScalarType::Byte, mat1.device(), std::nullopt);
-        workspacePtr = workspace.data_ptr();
-    }
+    at::Tensor workspace = at::detail::empty_cuda({workspaceSize}, at::ScalarType::Byte, mat1.device(), std::nullopt);
 
-    fp8_block_scaling_gemm_out(mat1, mat2, mat1Scale, mat2Scale, workspacePtr, out);
+    fp8_block_scaling_gemm_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
 
     return out;
 }
