@@ -31,14 +31,22 @@ namespace btg = batchedGemm::trtllm::gen;
 using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::RoutingMethodType;
 using MoeRunnerType = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::Runner;
 
-torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor> const& routing_logits,
-    torch::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
-    std::optional<torch::Tensor> const& hidden_states_scale, torch::Tensor const& gemm1_weights,
-    torch::Tensor const& gemm1_weights_scale, std::optional<torch::Tensor> const& gemm1_bias,
-    std::optional<torch::Tensor> const& gemm1_alpha, std::optional<torch::Tensor> const& gemm1_beta,
-    std::optional<torch::Tensor> const& gemm1_clamp_limit, torch::Tensor const& gemm2_weights,
-    torch::Tensor const& gemm2_weights_scale, std::optional<torch::Tensor> const& gemm2_bias,
-    std::optional<torch::Tensor> const& output1_scale_scalar,
+/**
+ * Core MoE runner implementation that uses a pre-allocated output tensor.
+ *
+ * This function contains the main MoE logic and is called by both run() and run_out().
+ * When called from run_out(), the output tensor is pre-allocated by the caller (e.g.,
+ * TensorRT plugin with workspace). All intermediate tensor allocations use
+ * at::detail::empty_cuda() which can be redirected via a custom allocator.
+ */
+void dtype_mxe2m1_block_scale_moe_runner_out(torch::Tensor& output,
+    torch::optional<torch::Tensor> const& routing_logits, torch::optional<torch::Tensor> const& routing_bias,
+    torch::Tensor const& hidden_states, std::optional<torch::Tensor> const& hidden_states_scale,
+    torch::Tensor const& gemm1_weights, torch::Tensor const& gemm1_weights_scale,
+    std::optional<torch::Tensor> const& gemm1_bias, std::optional<torch::Tensor> const& gemm1_alpha,
+    std::optional<torch::Tensor> const& gemm1_beta, std::optional<torch::Tensor> const& gemm1_clamp_limit,
+    torch::Tensor const& gemm2_weights, torch::Tensor const& gemm2_weights_scale,
+    std::optional<torch::Tensor> const& gemm2_bias, std::optional<torch::Tensor> const& output1_scale_scalar,
     std::optional<torch::Tensor> const& output1_scale_gate_scalar,
     std::optional<torch::Tensor> const& output2_scale_scalar, int64_t const num_experts, int64_t const top_k,
     std::optional<int64_t> const n_group, std::optional<int64_t> const topk_group, int64_t const intermediate_size,
@@ -179,6 +187,11 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     args.local_num_experts = local_num_experts;
     args.routed_scaling_factor = routed_scaling_factor.value_or(1.0);
     args.intermediate_size = intermediate_size;
+
+    TORCH_CHECK(output.dim() == 2, "output must be 2D.");
+    TORCH_CHECK(output.sizes()[0] == args.num_tokens, "output dim0 must match num_tokens.");
+    TORCH_CHECK(output.sizes()[1] == args.hidden_size_output.value(), "output dim1 must match hidden_size_output.");
+    TORCH_CHECK(output.scalar_type() == at::ScalarType::BFloat16, "output must be BFloat16.");
 
     // allocate workspace for routing kernel
     if (routing_logits.has_value() && topk_ids.has_value())
@@ -396,10 +409,6 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
             output2_scale_scalar->sizes()[0] == local_num_experts, "output2_scales_scalar has incorrect dim 0.");
     }
 
-    // allocate output
-    at::Tensor output = at::detail::empty_cuda({args.num_tokens, args.hidden_size_output.value()},
-        at::ScalarType::BFloat16, hidden_states.device(), std::nullopt);
-
     // setup workspace
     workspace.total_num_padded_tokens = total_num_padded_tokens.data_ptr<int>();
     workspace.total_max_padded_tokens = max_num_padded_tokens;
@@ -435,6 +444,46 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     workspace.bmm2_workspace = workspace_fc2.data_ptr();
     auto const& moe_stream = at::cuda::getCurrentCUDAStream(hidden_states.get_device());
     moe_runner.run(args, workspace, hidden_states.get_device(), moe_stream, moeConfigIndex);
+}
+
+/**
+ * Original run function that allocates output and delegates to _out variant.
+ *
+ * This function allocates the output tensor and calls dtype_mxe2m1_block_scale_moe_runner_out
+ * to perform the actual computation. This ensures code deduplication while maintaining
+ * backward compatibility with existing callers.
+ */
+torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor> const& routing_logits,
+    torch::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
+    std::optional<torch::Tensor> const& hidden_states_scale, torch::Tensor const& gemm1_weights,
+    torch::Tensor const& gemm1_weights_scale, std::optional<torch::Tensor> const& gemm1_bias,
+    std::optional<torch::Tensor> const& gemm1_alpha, std::optional<torch::Tensor> const& gemm1_beta,
+    std::optional<torch::Tensor> const& gemm1_clamp_limit, torch::Tensor const& gemm2_weights,
+    torch::Tensor const& gemm2_weights_scale, std::optional<torch::Tensor> const& gemm2_bias,
+    std::optional<torch::Tensor> const& output1_scale_scalar,
+    std::optional<torch::Tensor> const& output1_scale_gate_scalar,
+    std::optional<torch::Tensor> const& output2_scale_scalar, int64_t const num_experts, int64_t const top_k,
+    std::optional<int64_t> const n_group, std::optional<int64_t> const topk_group, int64_t const intermediate_size,
+    std::optional<int64_t> const hidden_size_output, int64_t const local_expert_offset, int64_t const local_num_experts,
+    std::optional<double> const routed_scaling_factor, int64_t const tile_tokens_dim, int64_t const routing_method_type,
+    btg::Dtype const dtype, MoeRunnerType& moe_runner, int64_t moeConfigIndex,
+    torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids)
+{
+    auto const num_tokens = hidden_states.sizes()[0];
+    auto const hidden_size = hidden_states.sizes()[1];
+    int64_t actual_hidden_size_output = hidden_size_output.value_or(hidden_size);
+
+    // allocate output
+    at::Tensor output = at::detail::empty_cuda(
+        {num_tokens, actual_hidden_size_output}, at::ScalarType::BFloat16, hidden_states.device(), std::nullopt);
+
+    dtype_mxe2m1_block_scale_moe_runner_out(output, routing_logits, routing_bias, hidden_states, hidden_states_scale,
+        gemm1_weights, gemm1_weights_scale, gemm1_bias, gemm1_alpha, gemm1_beta, gemm1_clamp_limit, gemm2_weights,
+        gemm2_weights_scale, gemm2_bias, output1_scale_scalar, output1_scale_gate_scalar, output2_scale_scalar,
+        num_experts, top_k, n_group, topk_group, intermediate_size, hidden_size_output, local_expert_offset,
+        local_num_experts, routed_scaling_factor, tile_tokens_dim, routing_method_type, dtype, moe_runner,
+        moeConfigIndex, topk_weights, topk_ids);
+
     return output;
 }
 
@@ -517,7 +566,19 @@ public:
         return mRunner->getValidConfigIndices(topK, hiddenSize, intermediateSize, numLocalExperts, numTokens);
     }
 
-    [[nodiscard]] torch::Tensor run(torch::optional<torch::Tensor> const& routing_logits,
+    /**
+     * Runs MoE computation with a pre-allocated output tensor.
+     *
+     * This method is designed for use with TensorRT plugins where the output
+     * memory is managed by TensorRT. All intermediate allocations (via
+     * at::detail::empty_cuda) will use a workspace allocator backed by
+     * TensorRT-provided workspace memory.
+     *
+     * @param output Pre-allocated output tensor [num_tokens, hidden_size_output] bf16
+     * @param routing_logits Optional routing logits tensor
+     * @param ... (same parameters as run())
+     */
+    void run_out(torch::Tensor output, torch::optional<torch::Tensor> const& routing_logits,
         std::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
         std::optional<torch::Tensor> const& hidden_states_scale, torch::Tensor const& gemm1_weights,
         torch::Tensor const& gemm1_weights_scale, std::optional<torch::Tensor> const& gemm1_bias,
@@ -542,12 +603,45 @@ public:
                 top_k, hidden_size, intermediate_size, local_num_experts, num_tokens);
         }
 
-        return dtype_mxe2m1_block_scale_moe_runner(routing_logits, routing_bias, hidden_states, hidden_states_scale,
-            gemm1_weights, gemm1_weights_scale, gemm1_bias, gemm1_alpha, gemm1_beta, gemm1_clamp_limit, gemm2_weights,
+        dtype_mxe2m1_block_scale_moe_runner_out(output, routing_logits, routing_bias, hidden_states,
+            hidden_states_scale, gemm1_weights, gemm1_weights_scale, gemm1_bias, gemm1_alpha, gemm1_beta,
+            gemm1_clamp_limit, gemm2_weights, gemm2_weights_scale, gemm2_bias, output1_scale_scalar,
+            output1_scale_gate_scalar, output2_scale_scalar, num_experts, top_k, n_group, topk_group, intermediate_size,
+            hidden_size_output, local_expert_offset, local_num_experts, routed_scaling_factor, mTileTokensDim,
+            routing_method_type, mDtypeAct, *mRunner, moeConfigIndex, topk_weights, topk_ids);
+    }
+
+    [[nodiscard]] torch::Tensor run(torch::optional<torch::Tensor> const& routing_logits,
+        std::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
+        std::optional<torch::Tensor> const& hidden_states_scale, torch::Tensor const& gemm1_weights,
+        torch::Tensor const& gemm1_weights_scale, std::optional<torch::Tensor> const& gemm1_bias,
+        std::optional<torch::Tensor> const& gemm1_alpha, std::optional<torch::Tensor> const& gemm1_beta,
+        std::optional<torch::Tensor> const& gemm1_clamp_limit, torch::Tensor const& gemm2_weights,
+        torch::Tensor const& gemm2_weights_scale, std::optional<torch::Tensor> const& gemm2_bias,
+        std::optional<torch::Tensor> const& output1_scale_scalar,
+        std::optional<torch::Tensor> const& output1_scale_gate_scalar,
+        std::optional<torch::Tensor> const& output2_scale_scalar, int64_t num_experts, int64_t top_k,
+        std::optional<int64_t> const n_group, std::optional<int64_t> const topk_group, int64_t intermediate_size,
+        std::optional<int64_t> const hidden_size_output, int64_t local_expert_offset, int64_t local_num_experts,
+        std::optional<double> routed_scaling_factor, int64_t routing_method_type, int64_t moeConfigIndex,
+        torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids)
+    {
+        auto const num_tokens = hidden_states.sizes()[0];
+        auto const hidden_size = hidden_states.sizes()[1];
+        int64_t actual_hidden_size_output = hidden_size_output.value_or(hidden_size);
+
+        // Allocate output tensor
+        at::Tensor output = at::detail::empty_cuda(
+            {num_tokens, actual_hidden_size_output}, at::ScalarType::BFloat16, hidden_states.device(), std::nullopt);
+
+        // Delegate to run_out
+        run_out(output, routing_logits, routing_bias, hidden_states, hidden_states_scale, gemm1_weights,
+            gemm1_weights_scale, gemm1_bias, gemm1_alpha, gemm1_beta, gemm1_clamp_limit, gemm2_weights,
             gemm2_weights_scale, gemm2_bias, output1_scale_scalar, output1_scale_gate_scalar, output2_scale_scalar,
             num_experts, top_k, n_group, topk_group, intermediate_size, hidden_size_output, local_expert_offset,
-            local_num_experts, routed_scaling_factor, mTileTokensDim, routing_method_type, mDtypeAct, *mRunner,
-            moeConfigIndex, topk_weights, topk_ids);
+            local_num_experts, routed_scaling_factor, routing_method_type, moeConfigIndex, topk_weights, topk_ids);
+
+        return output;
     }
 
 private:
@@ -574,5 +668,6 @@ TORCH_LIBRARY_FRAGMENT(trtllm, m)
     m.class_<torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner>("MxE4m3MxE2m1BlockScaleMoERunner")
         .def(torch::init<int64_t, int64_t, bool>())
         .def("get_valid_configs", &torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::getValidConfigs)
+        .def("run_moe_out", &torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::run_out)
         .def("run_moe", &torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::run);
 }
