@@ -653,6 +653,151 @@ public:
             *mRunners[tileN], config, topk_weights, topk_ids, output);
     }
 
+    /**
+     * Calculates the workspace size required for intermediate tensors used by run_out().
+     *
+     * This method computes the total memory required for all intermediate tensors
+     * allocated during MoE computation, which can be used to pre-allocate workspace
+     * memory for a custom arena allocator.
+     *
+     * @param num_tokens Number of input tokens
+     * @param hidden_size Hidden size dimension
+     * @param intermediate_size Intermediate size dimension
+     * @param num_experts Number of experts
+     * @param top_k Top-k value for routing
+     * @param n_group Optional number of groups
+     * @param topk_group Optional topk group value
+     * @param hidden_size_output Optional output hidden size (defaults to hidden_size)
+     * @param local_expert_offset Local expert offset
+     * @param local_num_experts Local number of experts
+     * @param routed_scaling_factor Optional routed scaling factor
+     * @param moeConfigIndex MoE configuration index (-1 for default)
+     * @return Total workspace size in bytes
+     */
+    [[nodiscard]] int64_t get_workspace_size(int64_t num_tokens, int64_t hidden_size, int64_t intermediate_size,
+        int64_t num_experts, int64_t top_k, std::optional<int64_t> const n_group,
+        std::optional<int64_t> const topk_group, std::optional<int64_t> const hidden_size_output,
+        int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
+        int64_t moeConfigIndex) const
+    {
+        int64_t actual_hidden_size_output = hidden_size_output.value_or(hidden_size);
+
+        // Resolve moeConfigIndex if needed
+        int64_t resolved_moeConfigIndex = moeConfigIndex;
+        if (resolved_moeConfigIndex == -1)
+        {
+            resolved_moeConfigIndex = mRunner->getDefaultValidConfigIndex(
+                top_k, hidden_size, intermediate_size, local_num_experts, num_tokens);
+        }
+
+        // Calculate max_num_padded_tokens
+        int32_t max_num_padded_tokens
+            = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxPermutedPaddedCount(
+                num_tokens, top_k, num_experts, mTileTokensDim);
+
+        // Calculate max_num_ctas
+        int32_t max_num_ctas = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxNumCtasInBatchDim(
+            num_tokens, top_k, num_experts, mTileTokensDim);
+
+        // Setup args for getWorkspaceSizeInBytes
+        tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::MoERunnerArgs args;
+        args.mDtypeElt = mDtypeAct;
+        args.num_tokens = num_tokens;
+        args.num_experts = num_experts;
+        args.hidden_size = hidden_size;
+        args.hidden_size_output = actual_hidden_size_output;
+        args.top_k = top_k;
+        args.n_group = n_group.value_or(0);
+        args.topk_group = topk_group.value_or(0);
+        args.local_expert_offset = local_expert_offset;
+        args.local_num_experts = local_num_experts;
+        args.routed_scaling_factor = routed_scaling_factor.value_or(1.0);
+        args.intermediate_size = intermediate_size;
+
+        // Get workspace sizes from moe_runner
+        auto workspace_sizes = mRunner->getWorkspaceSizeInBytes(args, resolved_moeConfigIndex);
+        size_t workspace_fc1_size = std::get<0>(workspace_sizes);
+        size_t workspace_fc2_size = std::get<1>(workspace_sizes);
+
+        // CUDA memory alignment: PyTorch's allocator typically aligns to 256 bytes
+        constexpr size_t CUDA_ALIGNMENT = 256;
+
+        // Helper lambda to round up size to nearest alignment boundary
+        auto align_size
+            = [CUDA_ALIGNMENT](size_t size) -> size_t { return (size + CUDA_ALIGNMENT - 1) & ~(CUDA_ALIGNMENT - 1); };
+
+        // Calculate sizes of all intermediate tensors (with alignment padding)
+        size_t total_size = 0;
+
+        // num_tokens_per_expert: {num_experts} Int
+        size_t num_tokens_per_expert_size = static_cast<size_t>(num_experts) * sizeof(int32_t);
+        total_size += align_size(num_tokens_per_expert_size);
+
+        // total_num_padded_tokens: {} Int (scalar)
+        size_t total_num_padded_tokens_size = sizeof(int32_t);
+        total_size += align_size(total_num_padded_tokens_size);
+
+        // expanded_idx_to_permuted_idx: {num_tokens * top_k} Int
+        size_t expanded_idx_size = static_cast<size_t>(num_tokens * top_k) * sizeof(int32_t);
+        total_size += align_size(expanded_idx_size);
+
+        // permuted_idx_to_token_idx: {max_num_padded_tokens} Int
+        size_t permuted_idx_size = static_cast<size_t>(max_num_padded_tokens) * sizeof(int32_t);
+        total_size += align_size(permuted_idx_size);
+
+        // expert_weights: {num_tokens, top_k} BFloat16 (always allocated, even if topk_weights provided)
+        size_t expert_weights_size = static_cast<size_t>(num_tokens * top_k) * sizeof(int16_t); // BFloat16 is 2 bytes
+        total_size += align_size(expert_weights_size);
+
+        // expert_indexes: {num_tokens, top_k} Int
+        size_t expert_indexes_size = static_cast<size_t>(num_tokens * top_k) * sizeof(int32_t);
+        total_size += align_size(expert_indexes_size);
+
+        // expert_count_histogram: {max(num_experts * 2, 256 * 2)} Int
+        int64_t size_of_expert_count_histogram = std::max(num_experts * 2, int64_t(256 * 2));
+        size_t expert_count_histogram_size = static_cast<size_t>(size_of_expert_count_histogram) * sizeof(int32_t);
+        total_size += align_size(expert_count_histogram_size);
+
+        // gemm1_output: {max_num_padded_tokens, intermediate_size}
+        // Type depends on dtype: BFloat16 (2 bytes) or Float8_e4m3fn (1 byte)
+        size_t gemm1_output_element_size = (mDtypeAct == btg::Dtype::Bfloat16) ? sizeof(int16_t) : sizeof(int8_t);
+        size_t gemm1_output_size
+            = static_cast<size_t>(max_num_padded_tokens * intermediate_size) * gemm1_output_element_size;
+        total_size += align_size(gemm1_output_size);
+
+        // gemm1_output_scale: {sf_size} UInt8 (only if dtype == MxE4m3)
+        if (mDtypeAct == btg::Dtype::MxE4m3)
+        {
+            int32_t const sf_block_size = 32;
+            int64_t sf_size
+                = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens, intermediate_size / sf_block_size);
+            size_t gemm1_output_scale_size = static_cast<size_t>(sf_size) * sizeof(uint8_t);
+            total_size += align_size(gemm1_output_scale_size);
+        }
+
+        // gemm2_output: {max_num_padded_tokens, hidden_size} BFloat16
+        size_t gemm2_output_size = static_cast<size_t>(max_num_padded_tokens * hidden_size) * sizeof(int16_t);
+        total_size += align_size(gemm2_output_size);
+
+        // cta_idx_xy_to_batch_idx: {max_num_ctas} Int
+        size_t cta_idx_xy_to_batch_idx_size = static_cast<size_t>(max_num_ctas) * sizeof(int32_t);
+        total_size += align_size(cta_idx_xy_to_batch_idx_size);
+
+        // cta_idx_xy_to_mn_limit: {max_num_ctas} Int
+        size_t cta_idx_xy_to_mn_limit_size = static_cast<size_t>(max_num_ctas) * sizeof(int32_t);
+        total_size += align_size(cta_idx_xy_to_mn_limit_size);
+
+        // num_non_exiting_ctas: {} Int (scalar)
+        size_t num_non_exiting_ctas_size = sizeof(int32_t);
+        total_size += align_size(num_non_exiting_ctas_size);
+
+        // workspace_fc1 and workspace_fc2 from moe_runner (these may already be aligned, but we align to be safe)
+        total_size += align_size(workspace_fc1_size);
+        total_size += align_size(workspace_fc2_size);
+
+        return static_cast<int64_t>(total_size);
+    }
+
 private:
     using RunnerType = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::Runner;
 
@@ -679,5 +824,6 @@ TORCH_LIBRARY_FRAGMENT(trtllm, m)
     m.class_<tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner>("MxE4m3MxE2m1BlockScaleMoERunner")
         .def(torch::init<int64_t, bool>())
         .def("get_valid_configs", &tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::getValidConfigs)
+        .def("get_workspace_size", &tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::get_workspace_size)
         .def("run_moe", &tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::run);
 }
