@@ -667,37 +667,42 @@ public:
      * @param top_k Top-k value for routing
      * @param n_group Optional number of groups
      * @param topk_group Optional topk group value
-     * @param hidden_size_output Optional output hidden size (defaults to hidden_size)
+     * @param output_hidden_size Optional output hidden size (defaults to hidden_size)
      * @param local_expert_offset Local expert offset
      * @param local_num_experts Local number of experts
      * @param routed_scaling_factor Optional routed scaling factor
-     * @param moeConfigIndex MoE configuration index (-1 for default)
+     * @param tile_config_pair MoE configuration pair (tileN, config) - use {-1, -1} for default
      * @return Total workspace size in bytes
      */
     [[nodiscard]] int64_t get_workspace_size(int64_t num_tokens, int64_t hidden_size, int64_t intermediate_size,
         int64_t num_experts, int64_t top_k, std::optional<int64_t> const n_group,
-        std::optional<int64_t> const topk_group, std::optional<int64_t> const hidden_size_output,
+        std::optional<int64_t> const topk_group, std::optional<int64_t> const output_hidden_size,
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
-        int64_t moeConfigIndex) const
+        std::vector<int64_t> tile_config_pair) const
     {
-        int64_t actual_hidden_size_output = hidden_size_output.value_or(hidden_size);
+        int64_t actual_output_hidden_size = output_hidden_size.value_or(hidden_size);
 
-        // Resolve moeConfigIndex if needed
-        int64_t resolved_moeConfigIndex = moeConfigIndex;
-        if (resolved_moeConfigIndex == -1)
+        // tile_config_pair corresponds to pair (tileN, config)
+        auto [tileN, config] = std::tie(tile_config_pair[0], tile_config_pair[1]);
+
+        // Resolve tileN and config if needed (autotuner has requested a default or 'fallback' config index)
+        if (tileN == -1 || config == -1)
         {
-            resolved_moeConfigIndex = mRunner->getDefaultValidConfigIndex(
-                top_k, hidden_size, intermediate_size, local_num_experts, num_tokens);
+            float const avg_tokens_per_expert = static_cast<float>(num_tokens * top_k) / local_num_experts;
+            tileN = std::clamp(nextPowerOfTwo(avg_tokens_per_expert), mSupportedTileN.front(), mSupportedTileN.back());
+
+            config = mRunners.at(tileN)->getDefaultValidConfigIndex(top_k, hidden_size, intermediate_size,
+                local_num_experts, num_tokens, output_hidden_size.value_or(hidden_size), intermediate_size);
         }
 
         // Calculate max_num_padded_tokens
         int32_t max_num_padded_tokens
             = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxPermutedPaddedCount(
-                num_tokens, top_k, num_experts, mTileTokensDim);
+                num_tokens, top_k, num_experts, tileN);
 
         // Calculate max_num_ctas
         int32_t max_num_ctas = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxNumCtasInBatchDim(
-            num_tokens, top_k, num_experts, mTileTokensDim);
+            num_tokens, top_k, num_experts, tileN);
 
         // Setup args for getWorkspaceSizeInBytes
         tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::MoERunnerArgs args;
@@ -705,7 +710,7 @@ public:
         args.num_tokens = num_tokens;
         args.num_experts = num_experts;
         args.hidden_size = hidden_size;
-        args.hidden_size_output = actual_hidden_size_output;
+        args.output_hidden_size = actual_output_hidden_size;
         args.top_k = top_k;
         args.n_group = n_group.value_or(0);
         args.topk_group = topk_group.value_or(0);
@@ -714,8 +719,8 @@ public:
         args.routed_scaling_factor = routed_scaling_factor.value_or(1.0);
         args.intermediate_size = intermediate_size;
 
-        // Get workspace sizes from moe_runner
-        auto workspace_sizes = mRunner->getWorkspaceSizeInBytes(args, resolved_moeConfigIndex);
+        // Get workspace sizes from the selected runner
+        auto workspace_sizes = mRunners.at(tileN)->getWorkspaceSizeInBytes(args, config);
         size_t workspace_fc1_size = std::get<0>(workspace_sizes);
         size_t workspace_fc2_size = std::get<1>(workspace_sizes);
 

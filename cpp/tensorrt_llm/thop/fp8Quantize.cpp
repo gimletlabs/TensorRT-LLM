@@ -94,7 +94,7 @@ void fp8_quantize_1x128_out(
     // The data is written into the preallocated tensor, and the caller can create views as needed.
 }
 
-std::tuple<at::Tensor, at::Tensor> fp8_quantize_1x128(at::Tensor const& self)
+std::tuple<at::Tensor, at::Tensor> fp8_quantize_1x128(at::Tensor const& self, bool use_ue8m0 = false)
 {
     CHECK_TH_CUDA(self);
 
@@ -130,7 +130,7 @@ std::tuple<at::Tensor, at::Tensor> fp8_quantize_1x128(at::Tensor const& self)
         {scale_tensor_size}, FP8_BLOCK_SCALING_SF_DTYPE, self.device(), /* stride */ std::nullopt); // 1D tensor
 
     // Call the _out version
-    fp8_quantize_1x128_out(self, quantized_tensor, scale_tensor);
+    fp8_quantize_1x128_out(self, quantized_tensor, scale_tensor, use_ue8m0);
 
     // Post-process the scale tensor for sm100 gemm/moe kernel
     at::Tensor final_scale_tensor = scale_tensor;
