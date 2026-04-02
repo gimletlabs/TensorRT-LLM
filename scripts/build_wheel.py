@@ -1531,6 +1531,7 @@ def main(*,
     scripts_dir = pkg_dir / "scripts"
     if scripts_dir.exists():
         clear_folder(scripts_dir)
+    scripts_dir.mkdir(parents=True, exist_ok=True)
 
     def get_binding_lib(subdirectory, name):
         binding_build_dir = (build_dir / "tensorrt_llm" / subdirectory)
