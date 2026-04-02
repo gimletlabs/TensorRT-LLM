@@ -176,6 +176,7 @@ public:
             ss << "qkv_bias: " << this->qkv_bias << std::endl;
             ss << "attention_mask: " << this->attention_mask << std::endl;
             ss << "attention_packed_mask: " << this->attention_packed_mask << std::endl;
+            ss << "attention_sinks: " << this->attention_sinks << std::endl;
             ss << "rotary_inv_freq: " << this->rotary_inv_freq << std::endl;
             ss << "rotary_cos_sin: " << this->rotary_cos_sin << std::endl;
             ss << "input_seq_length: " << this->input_seq_length << std::endl;
@@ -378,6 +379,11 @@ public:
         return mUseLognScaling;
     }
 
+    [[nodiscard]] bool isAttentionSinks() const
+    {
+        return mUseAttentionSinks;
+    }
+
     [[nodiscard]] bool isCrossAttention() const
     {
         return mCrossAttention;
@@ -474,6 +480,7 @@ public:
     int mRotaryEmbeddingOriginalMaxPositions = 1024;
     PositionEmbeddingType mPositionEmbeddingType = PositionEmbeddingType::kLEARNED_ABSOLUTE;
     bool mUseLognScaling = false;
+    bool mUseAttentionSinks = false;
     bool mRemovePadding = true;
     AttentionMaskType mMaskType = AttentionMaskType::CAUSAL;
     tensorrt_llm::kernels::BlockSparseParams mBlockSparseParams;
@@ -578,7 +585,7 @@ public:
             mUnidirectional, mQScaling, mAttnLogitSoftcappingScale, mRotaryEmbeddingDim, mRotaryEmbeddingBase,
             (int8_t) mRotaryEmbeddingScaleType, mRotaryEmbeddingScale, mRotaryEmbeddingShortMscale,
             mRotaryEmbeddingLongMscale, mRotaryEmbeddingMaxPositions, mRotaryEmbeddingOriginalMaxPositions,
-            (int8_t) mPositionEmbeddingType, mUseLognScaling, mRemovePadding, (int32_t) mMaskType,
+            (int8_t) mPositionEmbeddingType, mUseLognScaling, mUseAttentionSinks, mRemovePadding, (int32_t) mMaskType,
             mBlockSparseParams.data(), mPagedKVCache, mTokensPerBlock, mKVCacheQuantMode.value(), mTpSize, mTpRank,
             mUnfuseQkvGemm, (int32_t) mType, mMaxContextLength, mMaxSeqLen, mMaxNumRequests, mQKVBiasEnabled,
             mCrossAttention, mMaxDistance, mPosShiftEnabled, mPagedContextFMHA, mFP8ContextFMHA, mFP8AttenOutput,
