@@ -304,6 +304,12 @@ void MixtureOfExpertsPlugin::init()
     {
         mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<__nv_bfloat16, cutlass::uint4b_t>>();
     }
+#ifdef ENABLE_FP4
+    else if (mType == DataType::kBF16 && mWeightType == DataType::kFP4 && mOutputType == DataType::kBF16)
+    {
+        mMOERunner = std::make_unique<kernels::CutlassMoeFCRunner<__nv_bfloat16, __nv_fp4_e2m1>>();
+    }
+#endif
 #ifdef ENABLE_FP8
     else if (mType == DataType::kFP8 && mWeightType == DataType::kINT4 && mOutputType == DataType::kBF16)
     {
@@ -398,10 +404,17 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     {
         if (mGroupwiseQuantAlgo == 0)
         {
-            auto normalized_weight_type
-                = mWeightType == nvinfer1::DataType::kINT4 ? nvinfer1::DataType::kINT8 : mWeightType;
-            return inOut[pos].type == normalized_weight_type;
+            // FP4 and INT4 weights must be packed as INT8 to the plugin because
+            // TensorRT does not support these types.
+            if (mWeightType == nvinfer1::DataType::kINT4 || mWeightType == nvinfer1::DataType::kFP4)
+            {
+                return inOut[pos].type == nvinfer1::DataType::kINT8;
+            }
+            return inOut[pos].type == mWeightType;
         }
+        // Special case for groupwise attention that is not a sub-8bit type.
+        // NOTE(philkuz@gimlet): we don't hit this path but we keep it here for
+        // backwards compatibility.
         else
         {
             return inOut[pos].type == mOutputType;
@@ -493,6 +506,15 @@ bool MixtureOfExpertsPlugin::supportsFormatCombination(
     {
         return inOut[pos].type == mOutputType;
     }
+    else if (hasW4a16Mxfp4() && getExpertMxfp4Scale1Index() <= pos && pos <= getExpertMxfp4Scale2Index())
+    {
+        // We expect an f8e8m0 scale but we pack it as INT8 to the plugin because onnx-trt does not support f8e8m0.
+        return inOut[pos].type == nvinfer1::DataType::kINT8;
+    }
+    else if (hasSwigluBias() && pos >= getSwigluAlphaIndex() && pos <= getSwigluLimitIndex())
+    {
+        return inOut[pos].type == nvinfer1::DataType::kFLOAT;
+    }
     else
     {
         return inOut[pos].type == mType;
@@ -519,10 +541,11 @@ void MixtureOfExpertsPlugin::configurePlugin(nvinfer1::DynamicPluginTensorDesc c
     auto weights_1 = in[getExpertWeights1Index()];
     auto weights_2 = in[getExpertWeights2Index()];
     int inner_dim_idx = getGemmShapeInnerDimIndex();
-    int const maxK = weights_1.max.d[inner_dim_idx];
-    int const maxN = weights_2.max.d[inner_dim_idx];
-    int const minK = weights_1.min.d[inner_dim_idx];
-    int const minN = weights_2.min.d[inner_dim_idx];
+    auto inner_packed_elements = getWeightPackedElements().first;
+    int const maxK = weights_1.max.d[inner_dim_idx] * inner_packed_elements;
+    int const maxN = weights_2.max.d[inner_dim_idx] * inner_packed_elements;
+    int const minK = weights_1.min.d[inner_dim_idx] * inner_packed_elements;
+    int const minN = weights_2.min.d[inner_dim_idx] * inner_packed_elements;
 
     TLLM_CHECK_WITH_INFO(minN == maxN, "Variable out channels is not allowed");
     TLLM_CHECK_WITH_INFO(minK == maxK, "Variable in channels is not allowed");
@@ -930,6 +953,12 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
             getFP4GlobalSF2Index()                       //
         );
     }
+    else if (hasW4a16Mxfp4())
+    {
+        auto fc1_weight_scales = static_cast<void const*>(inputs[getExpertMxfp4Scale1Index()]);
+        auto fc2_weight_scales = static_cast<void const*>(inputs[getExpertMxfp4Scale2Index()]);
+        quant_params = QuantParams::GroupWise(mGroupSize, fc1_weight_scales, fc2_weight_scales);
+    }
 
     LoraParams lora_params{};
 
@@ -958,13 +987,21 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
 
     MoeMinLatencyParams min_latency_params{};
     mMOERunner->setTactic(gemm1, gemm2);
+
+    // Build activation params with optional swiglu parameters
+    ActivationParams activation_params = hasSwigluBias()
+        ? ActivationParams(mActivationType, static_cast<float const*>(inputs[getSwigluAlphaIndex()]),
+            static_cast<float const*>(inputs[getSwigluBetaIndex()]),
+            static_cast<float const*>(inputs[getSwigluLimitIndex()]))
+        : ActivationParams(mActivationType);
+
 #ifdef USING_OSS_CUTLASS_MOE_GEMM
     mMOERunner->runMoe(inputs[getInputTensorIndex()], nullptr, true,
         static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
-        inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr,
-        ActivationParams(mActivationType), inputs[getExpertWeights2Index()],
-        hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens, num_tokens, mExpertHiddenSize,
+        inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr, activation_params,
+        inputs[getExpertWeights2Index()], hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens,
+        mExpertHiddenSize,
         mExpertHiddenSize /*TRT does not support padding, safe to assume padded/unpadded hidden sizes are the same*/,
         mExpertInterSize, mNumExperts, mExpertsPerToken, static_cast<char*>(workspace.workspace),
         // Outputs
@@ -975,10 +1012,9 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
     mMOERunner->runMoe(inputs[getInputTensorIndex()], nullptr, true,
         static_cast<int const*>(inputs[getTokenSelectedExpertsIndex()]),
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
-        inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr,
-        ActivationParams(mActivationType), inputs[getExpertWeights2Index()],
-        hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens, num_tokens, mExpertHiddenSize,
-        mExpertInterSize, mNumExperts, mExpertsPerToken, static_cast<char*>(workspace.workspace),
+        inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr, activation_params,
+        inputs[getExpertWeights2Index()], hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens,
+        mExpertHiddenSize, mExpertInterSize, mNumExperts, mExpertsPerToken, static_cast<char*>(workspace.workspace),
         // Outputs
         outputs[getOutputTensorIndex()], static_cast<int*>(workspace.src_to_dest_map), mParallelismConfig, hasLora(),
         lora_params, /*use_deepseek_fp8_block_scale=*/false,
@@ -1299,14 +1335,24 @@ void MixtureOfExpertsGemmProfiler::checkInit()
     }
     init_backend = true;
     auto& plugin = *mRunner;
+
+    // TensorRT uses kINT8 for 4-bit weights, but the kernel expects kUINT8 for wfp4a16 mode
+    // Translate kINT8 -> kUINT8 when passing to the backend for FP4 weights
+    auto kernel_weight_type = plugin.mWeightType;
+    if (plugin.mWeightType == nvinfer1::DataType::kFP4)
+    {
+        TLLM_LOG_TRACE("Initializing profiler backend with kUINT8 weight type in place of FP4 weights");
+        kernel_weight_type = nvinfer1::DataType::kUINT8;
+    }
+
 #ifdef USING_OSS_CUTLASS_MOE_GEMM
-    backend.init(*plugin.mMOERunner, backend.mGemmToProfile, plugin.mType, plugin.mWeightType, plugin.mOutputType,
+    backend.init(*plugin.mMOERunner, backend.mGemmToProfile, plugin.mType, kernel_weight_type, plugin.mOutputType,
         plugin.mNumExperts, plugin.mExpertsPerToken, plugin.mExpertHiddenSize,
         plugin.mExpertHiddenSize /*TRT backend does not support unpadded hidden size*/, plugin.mExpertInterSize,
         plugin.mGroupSize, plugin.mActivationType, plugin.hasBias(), plugin.hasLora(), /*min_latency_mode=*/false,
         /*need_weights=*/true, plugin.getParallelismConfig(), /*enable_alltoall=*/false);
 #else
-    backend.init(*plugin.mMOERunner, backend.mGemmToProfile, plugin.mType, plugin.mWeightType, plugin.mOutputType,
+    backend.init(*plugin.mMOERunner, backend.mGemmToProfile, plugin.mType, kernel_weight_type, plugin.mOutputType,
         plugin.mNumExperts, plugin.mExpertsPerToken, plugin.mExpertHiddenSize, plugin.mExpertInterSize,
         plugin.mGroupSize, plugin.mActivationType, plugin.hasBias(), plugin.hasLora(), /*min_latency_mode=*/false,
         /*need_weights=*/true, plugin.getParallelismConfig());
