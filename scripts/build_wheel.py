@@ -1339,6 +1339,7 @@ def main(*,
     scripts_dir = pkg_dir / "scripts"
     if scripts_dir.exists():
         clear_folder(scripts_dir)
+    scripts_dir.mkdir(parents=True, exist_ok=True)
 
     if not cpp_only:
 

@@ -51,15 +51,15 @@ install_ubuntu_requirements() {
     if [[ $(apt list --installed | grep libcudnn9) ]]; then
       apt-get remove --purge -y libcudnn9*
     fi
-    if [[ $(apt list --installed | grep libnccl) ]]; then
-      apt-get remove --purge -y --allow-change-held-packages libnccl*
-    fi
-    if [[ $(apt list --installed | grep libcublas) ]]; then
-      apt-get remove --purge -y --allow-change-held-packages libcublas*
-    fi
-    if [[ $(apt list --installed | grep cuda-nvrtc-dev) ]]; then
-      apt-get remove --purge -y --allow-change-held-packages cuda-nvrtc-dev*
-    fi
+    #if [[ $(apt list --installed | grep libnccl) ]]; then
+    #  apt-get remove --purge -y --allow-change-held-packages libnccl*
+    #fi
+    #if [[ $(apt list --installed | grep libcublas) ]]; then
+    #  apt-get remove --purge -y --allow-change-held-packages libcublas*
+    #fi
+    #if [[ $(apt list --installed | grep cuda-nvrtc-dev) ]]; then
+    #  apt-get remove --purge -y --allow-change-held-packages cuda-nvrtc-dev*
+    #fi
 
     CUDA_MAJOR_VER=$(echo $CUDA_VER | cut -d. -f1)
     CUBLAS_MAJOR_VER=$(echo $CUBLAS_VER | cut -d. -f1)
