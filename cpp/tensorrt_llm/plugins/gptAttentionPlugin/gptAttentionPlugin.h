@@ -66,6 +66,7 @@ namespace tensorrt_llm::plugins
 //     14. rotary_inv_freq [head_size / 2] or [head_size] (longrope type) (float) (on device, optional)
 //     15. rotary_cos_sin [max_num_embedding_positions, 2] (float) (on device, optional)
 //     16. alibi_slopes [num_heads] (optional for ALiBi position embedding)
+//     16.5 attention_sinks [num_heads] (float32) (optional for GPT-OSS learnable sinks)
 //     17. relative_attention_bias [num_heads] (optional for ALiBi position embedding)
 //     18. host_context_lengths [batch_size] int32. (optional, required when remove_input_padding is true)
 //     19. qkv_bias (optional) [local_hidden_size * 3]
@@ -106,9 +107,10 @@ public:
         float rotary_embedding_base, tensorrt_llm::kernels::RotaryScalingType rotary_embedding_scale_type,
         float rotary_embedding_scale, float rotary_embedding_short_m_scale, float rotary_embedding_long_m_scale,
         int rotary_embedding_max_positions, int rotary_embedding_original_max_positions, int tp_size,
-        int tp_rank,           // for ALiBi
-        bool unfuse_qkv_gemm,  // for AutoPP
-        bool use_logn_scaling, // for LognScaling
+        int tp_rank,              // for ALiBi
+        bool unfuse_qkv_gemm,     // for AutoPP
+        bool use_logn_scaling,    // for LognScaling
+        bool use_attention_sinks, // for GPT-OSS attention sinks
         tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
         tensorrt_llm::kernels::AttentionMaskType mask_type,
         tensorrt_llm::kernels::BlockSparseParams block_sparse_params, bool paged_kv_cache, int tokens_per_block,
@@ -205,6 +207,7 @@ private:
         ROTARY_INV_FREQ,
         ROTARY_COS_SIN,
         ALIBI_SLOPES,
+        ATTENTION_SINKS,
         RELATIVE_ATTENTION_BIAS,
         CROSS_KV,
         CROSS_KV_LENGTH,
