@@ -923,6 +923,7 @@ def main(*,
          out_of_tree: bool = False,
          use_3rdparty_cache: bool = False,
          fast_build: bool = False,
+         only_run_setup: bool = False,
          install: bool = False,
          skip_building_wheel: bool = False,
          linking_install_binary: bool = False,
@@ -990,6 +991,9 @@ def main(*,
                                          no_venv,
                                          yes=yes,
                                          build_root=build_root)
+
+    if only_run_setup:
+        return
 
     if cuda_architectures is not None:
         if "70-real" in cuda_architectures:
@@ -1715,6 +1719,8 @@ def main(*,
 
 
 def add_arguments(parser: ArgumentParser):
+    parser.add_argument("--only_run_setup", action="store_true",
+                        help="Only run the setup steps and exit")
     parser.add_argument(
         "--build_type",
         "-b",

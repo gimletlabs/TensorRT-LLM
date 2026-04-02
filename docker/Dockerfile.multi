@@ -167,17 +167,25 @@ ARG GIT_COMMIT
 ARG GITHUB_MIRROR=""
 ARG BUILD_WHEEL_ARGS="--clean"
 ARG BUILD_WHEEL_SCRIPT="scripts/build_wheel.py"
-RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} \
+ARG BUILD_DIR=/src/tensorrt_llm/cpp/build
+# Run the script with just the setup so that we cache the venv and conan setup.
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
+    GITHUB_MIRROR=$GITHUB_MIRROR python3 ${BUILD_WHEEL_SCRIPT} --only_run_setup
+
+COPY cpp cpp
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
     --mount=type=secret,id=github_clone_token \
-    if [ -n "$GITHUB_MIRROR" ]; then \
-      export PIP_INDEX_URL="https://urm.nvidia.com/artifactory/api/pypi/pypi-remote/simple"; \
-    fi && \
-    # Authenticates `git submodule update` and the CMake FetchContent clones
-    # (3rdparty/fetch_content.json) that this build pulls from github.com.
     . docker/common/github_auth.sh && \
     TRTLLM_BUILD_SOURCE_COMMIT=${GIT_COMMIT} \
-    GITHUB_MIRROR=${GITHUB_MIRROR} \
-    python3 ${BUILD_WHEEL_SCRIPT} ${BUILD_WHEEL_ARGS}
+    GITHUB_MIRROR=${GITHUB_MIRROR} python3 ${BUILD_WHEEL_SCRIPT} ${BUILD_WHEEL_ARGS}
+
+# HACK; build_dir is cached which also means it is not available after this step.
+# We copy it over to a new directory that is not cached, then move it back to the build directory
+# so later users can access it.
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
+    cp -r "${BUILD_DIR}" "/build"
+
+RUN mv /build ${BUILD_DIR}
 
 FROM ${DEVEL_IMAGE} AS release
 
