@@ -53,9 +53,10 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
     float rotary_embedding_scale, float rotary_embedding_short_m_scale,
     float rotary_embedding_long_m_scale, // magnitude scaling factors for Phi-3 long RoPE
     int rotary_embedding_max_positions, int rotary_embedding_original_max_positions, int tp_size,
-    int tp_rank,                         // for ALiBi
-    bool unfuse_qkv_gemm,                // for AutoPP
-    bool use_logn_scaling,               // for LognScaling
+    int tp_rank,              // for ALiBi
+    bool unfuse_qkv_gemm,     // for AutoPP
+    bool use_logn_scaling,    // for LognScaling
+    bool use_attention_sinks, // for GPT-OSS attention sinks
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, int kv_cache_quant_mode, bool remove_input_padding,
     tensorrt_llm::kernels::AttentionMaskType mask_type, tensorrt_llm::kernels::BlockSparseParams block_sparse_params,
     bool paged_kv_cache, int tokens_per_block, nvinfer1::DataType type, int32_t max_context_length,
