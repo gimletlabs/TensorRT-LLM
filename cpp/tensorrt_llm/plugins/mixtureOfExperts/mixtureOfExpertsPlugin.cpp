@@ -48,7 +48,7 @@ MixtureOfExpertsPlugin::MixtureOfExpertsPlugin(bool remove_input_padding, int nu
     nvinfer1::DataType output_type, QuantMode quant_mode, bool use_final_scales, bool use_bias, int tp_size,
     int tp_rank, int ep_size, int ep_rank, bool force_determinism, int side_stream_id,
     MixtureOfExpertsPluginProfilerPtr gemm_profiler_ptr, bool use_lora, nvinfer1::DataType lora_type,
-    LoraPluginProfilerPtr lora_profiler, int max_low_rank)
+    LoraPluginProfilerPtr lora_profiler, int max_low_rank, int expert_unpadded_hidden_size)
     : mNumExperts(number_of_experts)
     , mExpertsPerToken(experts_per_token)
     , mExpertHiddenSize(expert_hidden_size)
@@ -71,6 +71,7 @@ MixtureOfExpertsPlugin::MixtureOfExpertsPlugin(bool remove_input_padding, int nu
     , mMaxLowRank(max_low_rank)
     , mRemoveInputPadding(remove_input_padding)
     , mLoraProfiler(std::move(lora_profiler))
+    , mExpertUnpaddedHiddenSize(expert_unpadded_hidden_size)
 {
     init();
 }
@@ -108,6 +109,7 @@ tensorrt_llm::plugins::MixtureOfExpertsPlugin::MixtureOfExpertsPlugin(MixtureOfE
     , mLoraProfiler(other.mLoraProfiler)
     , mLayerName(other.mLayerName)
     , mNamespace(other.mNamespace)
+    , mExpertUnpaddedHiddenSize(other.mExpertUnpaddedHiddenSize)
 {
     init();
 }
@@ -120,7 +122,7 @@ size_t MixtureOfExpertsPlugin::getSerializationSize() const noexcept
         + sizeof(QuantMode::BaseType) + sizeof(mUseFinalScales) + sizeof(mUseBias) + sizeof(mParallelismConfig)
         + sizeof(mDims) + sizeof(mUseDeterministicKernels) + sizeof(mSideStreamId)
         + mGemmProfiler->getSerializationSize(mGemmId1) + mGemmProfiler->getSerializationSize(mGemmId2)
-        + sizeof(mUseLora) + sizeof(mLoraType) + sizeof(mMaxLowRank);
+        + sizeof(mUseLora) + sizeof(mLoraType) + sizeof(mMaxLowRank) + sizeof(mExpertUnpaddedHiddenSize);
 
     if (hasLora())
     {
@@ -161,6 +163,7 @@ MixtureOfExpertsPlugin::MixtureOfExpertsPlugin(void const* data, size_t length,
     read(d, mUseLora);
     read(d, mLoraType);
     read(d, mMaxLowRank);
+    read(d, mExpertUnpaddedHiddenSize);
 
     // Call init before deserialising the profiler to initialize mGemmId
     init();
@@ -206,6 +209,7 @@ void MixtureOfExpertsPlugin::serialize(void* buffer) const noexcept
     write(d, mUseLora);
     write(d, mLoraType);
     write(d, mMaxLowRank);
+    write(d, mExpertUnpaddedHiddenSize);
 
     mGemmProfiler->serialize(d, mGemmId1);
     mGemmProfiler->serialize(d, mGemmId2);
@@ -261,6 +265,15 @@ void MixtureOfExpertsPlugin::init()
         "MoE FP8 is not supported for architectures less than SM89");
     TLLM_CHECK_WITH_INFO(mType != DataType::kFP4 || (tensorrt_llm::common::getSMVersion() >= 100),
         "MoE FP4 is only supported on architecture SM100 or later");
+
+    // MXFP4 weights require alignment to a multiple of 128.
+    if (hasW4a16Mxfp4())
+    {
+        TLLM_CHECK_WITH_INFO(mExpertHiddenSize % 128 == 0,
+            "hidden_size must be divisible by 128 for MXFP4 weights, got %d", static_cast<int>(mExpertHiddenSize));
+        TLLM_CHECK_WITH_INFO(mExpertInterSize % 128 == 0,
+            "inter_size must be divisible by 128 for MXFP4 weights, got %d", static_cast<int>(mExpertInterSize));
+    }
 
     TLLM_CHECK_WITH_INFO(!hasLora() || mLoraType == mOutputType, "The LoraType need to keep same with moe OutputType.");
 
@@ -383,7 +396,17 @@ nvinfer1::DimsExprs MixtureOfExpertsPlugin::getOutputDimensions(
     int outputIndex, nvinfer1::DimsExprs const* inputs, int nbInputs, nvinfer1::IExprBuilder& exprBuilder) noexcept
 {
     assert(outputIndex == getOutputTensorIndex() || outputIndex == getOutputDummyTensorIndex());
-    return inputs[getInputTensorIndex()];
+
+    auto outputDims = inputs[getInputTensorIndex()];
+
+    if (mExpertUnpaddedHiddenSize != 0)
+    {
+        // The last dimension should be mExpertUnpaddedHiddenSize instead of mExpertHiddenSize
+        int lastDimIdx = outputDims.nbDims - 1;
+        outputDims.d[lastDimIdx] = exprBuilder.constant(mExpertUnpaddedHiddenSize);
+    }
+
+    return outputDims;
 }
 
 bool MixtureOfExpertsPlugin::supportsFormatCombination(
@@ -1001,9 +1024,8 @@ int MixtureOfExpertsPlugin::enqueue(nvinfer1::PluginTensorDesc const* inputDesc,
         hasFinalScales() ? static_cast<float const*>(inputs[getTokenFinalScalesIndex()]) : nullptr,
         inputs[getExpertWeights1Index()], hasBias() ? inputs[getExpertBias1Index()] : nullptr, activation_params,
         inputs[getExpertWeights2Index()], hasBias() ? inputs[getExpertBias2Index()] : nullptr, quant_params, num_tokens,
-        mExpertHiddenSize,
-        mExpertHiddenSize /*TRT does not support padding, safe to assume padded/unpadded hidden sizes are the same*/,
-        mExpertInterSize, mNumExperts, mExpertsPerToken, static_cast<char*>(workspace.workspace),
+        mExpertHiddenSize, mExpertUnpaddedHiddenSize, mExpertInterSize, mNumExperts, mExpertsPerToken,
+        static_cast<char*>(workspace.workspace),
         // Outputs
         outputs[getOutputTensorIndex()], static_cast<int*>(workspace.src_to_dest_map), mParallelismConfig,
         /*enable_alltoall=*/false, hasLora(), lora_params, /*use_deepseek_fp8_block_scale=*/false,
@@ -1144,6 +1166,8 @@ MixtureOfExpertsPluginCreator::MixtureOfExpertsPluginCreator()
     mPluginAttributes.emplace_back(nvinfer1::PluginField("use_lora", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("lora_type_id", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(nvinfer1::PluginField("max_low_rank", nullptr, PluginFieldType::kINT32));
+    mPluginAttributes.emplace_back(
+        nvinfer1::PluginField("expert_unpadded_hidden_size", nullptr, PluginFieldType::kINT32));
     mFC.nbFields = mPluginAttributes.size();
     mFC.fields = mPluginAttributes.data();
 }
@@ -1175,6 +1199,7 @@ IPluginV2* MixtureOfExpertsPluginCreator::createPlugin(
     int mUseLora{};
     int mLoraType{INT_MAX};
     int mMaxLowRank{0};
+    int mExpertUnpaddedHiddenSize{0};
 
     // Read configurations from each fields
     struct MapPair
@@ -1211,6 +1236,7 @@ IPluginV2* MixtureOfExpertsPluginCreator::createPlugin(
         MapPair{"side_stream_id", std::ref(mSideStreamId), true},
         MapPair{"lora_type_id", std::ref(mLoraType), true},
         MapPair{"max_low_rank", std::ref(mMaxLowRank), true},
+        MapPair{"expert_unpadded_hidden_size", std::ref(mExpertUnpaddedHiddenSize), true},
     };
     for (int i = 0; i < fc->nbFields; ++i)
     {
@@ -1238,6 +1264,12 @@ IPluginV2* MixtureOfExpertsPluginCreator::createPlugin(
         mOutputType = mType;
     }
 
+    // If expert_unpadded_hidden_size is not set, default to expert_hidden_size
+    if (mExpertUnpaddedHiddenSize == 0)
+    {
+        mExpertUnpaddedHiddenSize = mExpertHiddenSize;
+    }
+
     if (mUseLora)
     {
         TLLM_CHECK_WITH_INFO(mLoraType != INT_MAX && mMaxLowRank != 0,
@@ -1255,7 +1287,7 @@ IPluginV2* MixtureOfExpertsPluginCreator::createPlugin(
             static_cast<nvinfer1::DataType>(mType), static_cast<nvinfer1::DataType>(mWeightType),
             static_cast<nvinfer1::DataType>(mOutputType), QuantMode(mQuantMode), mUseFinalScales != 0, mUseBias != 0,
             mTPSize, mTPRank, mEPSize, mEPRank, mRequiresDeterminism != 0, mSideStreamId, gemmProfiler, mUseLora != 0,
-            static_cast<nvinfer1::DataType>(mLoraType), loraProfiler, mMaxLowRank);
+            static_cast<nvinfer1::DataType>(mLoraType), loraProfiler, mMaxLowRank, mExpertUnpaddedHiddenSize);
         obj->setPluginNamespace(mNamespace.c_str());
         return obj;
     }
@@ -1347,9 +1379,9 @@ void MixtureOfExpertsGemmProfiler::checkInit()
 
 #ifdef USING_OSS_CUTLASS_MOE_GEMM
     backend.init(*plugin.mMOERunner, backend.mGemmToProfile, plugin.mType, kernel_weight_type, plugin.mOutputType,
-        plugin.mNumExperts, plugin.mExpertsPerToken, plugin.mExpertHiddenSize,
-        plugin.mExpertHiddenSize /*TRT backend does not support unpadded hidden size*/, plugin.mExpertInterSize,
-        plugin.mGroupSize, plugin.mActivationType, plugin.hasBias(), plugin.hasLora(), /*min_latency_mode=*/false,
+        plugin.mNumExperts, plugin.mExpertsPerToken, plugin.mExpertHiddenSize, plugin.mExpertUnpaddedHiddenSize,
+        plugin.mExpertInterSize, plugin.mGroupSize, plugin.mActivationType, plugin.hasBias(), plugin.hasLora(),
+        /*min_latency_mode=*/false,
         /*need_weights=*/true, plugin.getParallelismConfig(), /*enable_alltoall=*/false);
 #else
     backend.init(*plugin.mMOERunner, backend.mGemmToProfile, plugin.mType, kernel_weight_type, plugin.mOutputType,
