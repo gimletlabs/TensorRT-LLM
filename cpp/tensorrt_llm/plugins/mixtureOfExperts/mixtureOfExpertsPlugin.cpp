@@ -1403,12 +1403,12 @@ void MixtureOfExpertsGemmProfiler::checkInit()
     init_backend = true;
     auto& plugin = *mRunner;
 
-    // TensorRT uses kINT8 for 4-bit weights, but the kernel expects kUINT8 for wfp4a16 mode
-    // Translate kINT8 -> kUINT8 when passing to the backend for FP4 weights
+    // TensorRT uses kINT8 for 4-bit weights, but the kernel expects kUINT8 for wfp4a16 mode.
+    // Only translate kINT8 -> kUINT8 when we are actually in the W4A16 (MXFP4) path.
     auto kernel_weight_type = plugin.mWeightType;
-    if (plugin.mWeightType == nvinfer1::DataType::kFP4)
+    if (plugin.hasW4a16Mxfp4() && plugin.mWeightType == nvinfer1::DataType::kFP4)
     {
-        TLLM_LOG_TRACE("Initializing profiler backend with kUINT8 weight type in place of FP4 weights");
+        TLLM_LOG_TRACE("Initializing profiler backend with kUINT8 weight type in place of FP4 weights (w4a16)");
         kernel_weight_type = nvinfer1::DataType::kUINT8;
     }
 
