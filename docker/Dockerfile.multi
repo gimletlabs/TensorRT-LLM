@@ -109,7 +109,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /src/tensorrt_llm
 COPY benchmarks benchmarks
-COPY cpp cpp
 COPY docker docker
 COPY scripts scripts
 COPY tensorrt_llm tensorrt_llm
@@ -121,8 +120,22 @@ ENV CCACHE_DIR=/root/.cache/ccache
 ARG GITHUB_MIRROR=""
 ARG BUILD_WHEEL_ARGS="--clean --benchmarks"
 ARG BUILD_WHEEL_SCRIPT="scripts/build_wheel.py"
-RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} \
+ARG BUILD_DIR=/src/tensorrt_llm/cpp/build
+# Run the script with just the setup so that we cache the venv and conan setup.
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
+    GITHUB_MIRROR=$GITHUB_MIRROR python3 ${BUILD_WHEEL_SCRIPT} --only_run_setup
+
+COPY cpp cpp
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
     GITHUB_MIRROR=$GITHUB_MIRROR python3 ${BUILD_WHEEL_SCRIPT} ${BUILD_WHEEL_ARGS}
+
+# HACK; build_dir is cached which also means it is not available after this step.
+# We copy it over to a new directory that is not cached, then move it back to the build directory
+# so later users can access it.
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
+    cp -r "${BUILD_DIR}" "/build"
+
+RUN mv /build ${BUILD_DIR}
 
 FROM ${DEVEL_IMAGE} AS release
 
