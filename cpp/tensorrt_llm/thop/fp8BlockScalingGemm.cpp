@@ -126,7 +126,7 @@ torch::Tensor& fp8_block_scaling_gemm_ada_out(torch::Tensor const& mat1, torch::
 }
 
 torch::Tensor& fp8_block_scale_gemm_rtx_6000_out(torch::Tensor const& mat1, torch::Tensor const& mat2,
-    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, void* workspace, torch::Tensor& out)
+    torch::Tensor const& mat1Scale, torch::Tensor const& mat2Scale, torch::Tensor& workspace, torch::Tensor& out)
 {
     TORCH_CHECK(mat1.scalar_type() == at::ScalarType::Float8_e4m3fn, "Matrix dtype must be FP8.");
     TORCH_CHECK(mat2.scalar_type() == at::ScalarType::Float8_e4m3fn, "Matrix dtype must be FP8.");
@@ -161,9 +161,9 @@ torch::Tensor& fp8_block_scale_gemm_rtx_6000_out(torch::Tensor const& mat1, torc
     float const* mat1ScalePtr = reinterpret_cast<float const*>(mat1Scale.data_ptr());
     float const* mat2ScalePtr = reinterpret_cast<float const*>(mat2Scale.data_ptr());
 
-    if (workspace)
+    if (workspace.defined() && workspace.numel() > 0)
     {
-        gemm_runner->configureWorkspace(static_cast<char*>(workspace));
+        gemm_runner->configureWorkspace(static_cast<char*>(workspace.data_ptr()));
     }
 
     gemm_runner->gemm(reinterpret_cast<__nv_fp8_e4m3*>(mat1.data_ptr()), k,
@@ -320,6 +320,7 @@ extern torch::Tensor& fp8_block_scaling_gemm_out(torch::Tensor const& mat1, torc
     auto const sm = tensorrt_llm::common::getSMVersion();
     switch (sm)
     {
+    case 107:
     case 103: return fp8_block_scale_gemm_blackwell_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
     case 100: return fp8_block_scale_gemm_blackwell_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
     case 90: return fp8_block_scaling_gemm_hopper_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
@@ -335,6 +336,7 @@ extern int64_t fp8_block_scaling_gemm_workspace_size(int32_t m, int32_t n, int32
     auto const sm = tensorrt_llm::common::getSMVersion();
     switch (sm)
     {
+    case 107:
     case 103:
     case 100:
     {

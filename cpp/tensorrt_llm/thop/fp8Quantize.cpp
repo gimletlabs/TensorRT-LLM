@@ -96,7 +96,7 @@ void fp8_quantize_1x128_out(
     // The data is written into the preallocated tensor, and the caller can create views as needed.
 }
 
-std::tuple<at::Tensor, at::Tensor> fp8_quantize_1x128(at::Tensor const& self)
+std::tuple<at::Tensor, at::Tensor> fp8_quantize_1x128(at::Tensor const& self, bool use_ue8m0 = false)
 {
     CHECK_TH_CUDA(self);
 
@@ -132,7 +132,7 @@ std::tuple<at::Tensor, at::Tensor> fp8_quantize_1x128(at::Tensor const& self)
         {scale_tensor_size}, FP8_BLOCK_SCALING_SF_DTYPE, self.device(), /* stride */ std::nullopt); // 1D tensor
 
     // Call the _out version
-    fp8_quantize_1x128_out(self, quantized_tensor, scale_tensor);
+    fp8_quantize_1x128_out(self, quantized_tensor, scale_tensor, use_ue8m0);
 
     // Post-process the scale tensor for sm100 gemm/moe kernel
     at::Tensor final_scale_tensor = scale_tensor;
@@ -263,8 +263,11 @@ std::tuple<at::Tensor, at::Tensor> fp8_batched_quantize_1x128_permute102(at::Ten
     // Call the _out version
     fp8_batched_quantize_1x128_permute102_out(self, quantized_tensor, scale_tensor);
 
-    // Return the appropriately sliced tensors
-    return {quantized_tensor.slice(0, 0, b * m * n).view({b, m, n}), scale_tensor};
+    auto const num_n_blocks = (n + 127) / 128;
+    auto const act_scal_elesize = b * num_n_blocks * m_padded;
+    TORCH_CHECK(act_scal_elesize <= scale_tensor.numel(), "Scale tensor size mismatch");
+    auto scales = scale_tensor.view({-1}).slice(0, 0, act_scal_elesize).view({b, num_n_blocks, m_padded}).contiguous();
+    return {quantized_tensor.slice(0, 0, b * m * n).view({b, m, n}), scales};
 }
 
 // Fused 1x128 FP8 quantize + UE8M0 packing (SM100 family only: SM100/SM103/SM107).
