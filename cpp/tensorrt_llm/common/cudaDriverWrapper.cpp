@@ -89,6 +89,7 @@ CUDADriverWrapper::CUDADriverWrapper()
     *reinterpret_cast<void**>(&_cuLibraryLoadData) = load_sym(handle, "cuLibraryLoadData");
     *reinterpret_cast<void**>(&_cuLibraryGetGlobal) = load_sym(handle, "cuLibraryGetGlobal");
     *reinterpret_cast<void**>(&_cuLibraryUnload) = load_sym(handle, "cuLibraryUnload");
+    *reinterpret_cast<void**>(&_cuKernelGetFunction) = load_sym(handle, "cuKernelGetFunction");
     *reinterpret_cast<void**>(&_cuKernelSetAttribute) = load_sym(handle, "cuKernelSetAttribute");
     *reinterpret_cast<void**>(&_cuCtxGetDevice) = load_sym(handle, "cuCtxGetDevice");
     *reinterpret_cast<void**>(&_cuLinkAddFile) = load_sym(handle, "cuLinkAddFile_v2");
@@ -180,6 +181,11 @@ CUresult CUDADriverWrapper::cuLibraryGetGlobal(
 CUresult CUDADriverWrapper::cuLibraryUnload(CUlibrary library) const
 {
     return (*_cuLibraryUnload)(library);
+}
+
+CUresult CUDADriverWrapper::cuKernelGetFunction(CUfunction* pFunc, CUkernel kernel) const
+{
+    return (*_cuKernelGetFunction)(pFunc, kernel);
 }
 
 CUresult CUDADriverWrapper::cuKernelSetAttribute(

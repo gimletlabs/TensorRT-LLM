@@ -28,12 +28,56 @@
 #include "tensorrt_llm/kernels/unfusedAttentionKernels.h"
 #include "tensorrt_llm/kernels/xqaDispatcher.h"
 
+#include <array>
+#include <cstddef>
+#include <cstring>
+#include <type_traits>
+
 namespace
 {
 
 using ::tensorrt_llm::kernels::XQAKernelRuntimeHashKey;
 using ::tensorrt_llm::kernels::XQAParams;
 using ::tensorrt_llm::kernels::XQAKernelMetaInfo;
+
+template <typename KVCacheBuffer>
+struct StableKernelParamsStorage
+{
+    struct alignas(alignof(CUtensorMap)) ParamStorage
+    {
+        std::array<unsigned char, 512> bytes{};
+    };
+
+    static constexpr uint32_t kMaxNbKernelParams = 24;
+    static constexpr size_t kMaxParamStorageBytes = 512;
+    std::array<void*, kMaxNbKernelParams> kernelParams{};
+    std::array<ParamStorage, kMaxNbKernelParams> storage{};
+
+    void reset()
+    {
+        kernelParams.fill(nullptr);
+    }
+};
+
+template <typename KVCacheBuffer, typename Arg>
+void appendStableKernelParam(
+    StableKernelParamsStorage<KVCacheBuffer>& storage, uint32_t& idxNextParam, Arg const& arg)
+{
+    static_assert(std::is_trivially_copyable_v<Arg>, "Kernel parameter storage only supports trivially copyable args.");
+    static_assert(sizeof(Arg) <= StableKernelParamsStorage<KVCacheBuffer>::kMaxParamStorageBytes,
+        "Kernel parameter exceeds the reserved stable storage.");
+
+    TLLM_CHECK(idxNextParam < StableKernelParamsStorage<KVCacheBuffer>::kMaxNbKernelParams);
+    auto& paramStorage = storage.storage[idxNextParam];
+    std::memcpy(paramStorage.bytes.data(), &arg, sizeof(Arg));
+    storage.kernelParams[idxNextParam++] = paramStorage.bytes.data();
+}
+
+template <typename KVCacheBuffer>
+void** finalizeStableKernelParams(StableKernelParamsStorage<KVCacheBuffer>& storage)
+{
+    return storage.kernelParams.data();
+}
 
 XQAKernelRuntimeHashKey getRuntimeHashKeyFromKernelMeta(XQAKernelMetaInfo const& kernelMeta)
 {
@@ -270,6 +314,7 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
     bool const needOutputCvt = false;
     void* inputScratch = nullptr;
     buildXQALaunchParams(launchParams, inputScratch, needOutputCvt, xqaParams, kv_cache_buffer);
+    ScopedXQALaunchParamCleanup<KVCacheBuffer> launchParamsCleanup(launchParams, stream);
     if (needOutputCvt)
     {
         launchParams.output = inputScratch;
@@ -379,41 +424,36 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
             .mask = reinterpret_cast<SpecDecParams::MaskType const*>(xqaParams.spec_decoding_packed_mask)};
     };
 
-    constexpr uint32_t kMAX_NB_KERNEL_PARAMS = 19;
+    thread_local StableKernelParamsStorage<KVCacheBuffer> stableKernelParams;
+    stableKernelParams.reset();
     uint32_t idxNextParam = 0;
-    void* kernelParams[kMAX_NB_KERNEL_PARAMS];
-    auto appendParam = [&](auto* p) mutable
-    {
-        TLLM_CHECK(idxNextParam < kMAX_NB_KERNEL_PARAMS);
-        kernelParams[idxNextParam++] = const_cast<void*>(static_cast<void const*>(p));
-    };
+    auto appendParam = [&](auto const& value) mutable { appendStableKernelParam(stableKernelParams, idxNextParam, value); };
     void const* const kernel_input_tokens = (applyRoPEInXqaKernel ? launchParams.qkv : xqa_q_input_ptr);
     if (isMLAKernel)
     {
         CUtensorMap const tensorMapQ = makeTensorMapForXqaMlaQ(mDriver, xqaParams, kernel_input_tokens);
-        appendParam(&tensorMapQ);
+        appendParam(tensorMapQ);
         CUtensorMap const tensorMapK = makeTensorMapForXqaMlaKVCache(mDriver, xqaParams, kv_cache_buffer, true);
-        appendParam(&tensorMapK);
+        appendParam(tensorMapK);
         CUtensorMap const tensorMapV = makeTensorMapForXqaMlaKVCache(mDriver, xqaParams, kv_cache_buffer, false);
-        appendParam(&tensorMapV);
-        appendParam(&launchParams.qScale);
-        appendParam(&launchParams.output);
-        appendParam(&launchParams.kvCacheParams);
-        appendParam(&launchParams.batch_size);
-        appendParam(&launchParams.kv_scale_quant_orig);
-        appendParam(&launchParams.scratch);
-        appendParam(&launchParams.semaphores);
+        appendParam(tensorMapV);
+        appendParam(launchParams.qScale);
+        appendParam(launchParams.output);
+        appendParam(launchParams.kvCacheParams);
+        appendParam(launchParams.batch_size);
+        appendParam(launchParams.kv_scale_quant_orig);
+        appendParam(launchParams.scratch);
+        appendParam(launchParams.semaphores);
         uint32_t const multi_block = computeMultiBlockCountForMLA(xqaParams, multiprocessor_count);
         std::byte* const partialResults = static_cast<std::byte*>(launchParams.scratch)
             + xqaMlaCgaXBufSize * multi_block * xqaParams.total_num_input_tokens;
-        appendParam(&partialResults);
-        kernelParams[idxNextParam] = nullptr; // one extra nullptr at end as guard.
+        appendParam(partialResults);
         uint32_t const inputSeqLen = (xqaParams.multi_query_tokens || xqaParams.isMLA())
             ? static_cast<uint32_t>(xqaParams.generation_input_length)
             : 1U;
         dim3 const dimGrid{4 * inputSeqLen, multi_block, xqaParams.batch_size};
         dim3 const blockDim(128 * 3, 1, 1);
-        cubinObj->launch(dimGrid, blockDim, stream, kernelParams);
+        cubinObj->launch(dimGrid, blockDim, stream, finalizeStableKernelParams(stableKernelParams));
     }
     else if (isSpecDec && isHMMAKernel)
     {
@@ -428,35 +468,35 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
             xqaParams.spec_decoding_max_generation_length
                                                                                         : qSeqLen;
 
-        appendParam(&maxQSeqLen);
-        appendParam(&launchParams.num_k_heads);
-        appendParam(&headGrpSize);
-        appendParam(&launchParams.cu_seq_lens);
+        appendParam(maxQSeqLen);
+        appendParam(launchParams.num_k_heads);
+        appendParam(headGrpSize);
+        appendParam(launchParams.cu_seq_lens);
         bool const allowSlidingWindow
             = !(isSpecDec && xqaParams.is_spec_dec_tree); // sliding windows does not support spec dec with tree-based
                                                           // token, only chained tokens
         if (allowSlidingWindow)
         {
-            appendParam(&launchParams.slidingWindowSize);
+            appendParam(launchParams.slidingWindowSize);
         }
-        appendParam(&launchParams.qScale);
-        appendParam(&launchParams.output);
+        appendParam(launchParams.qScale);
+        appendParam(launchParams.output);
         if (isFp8Out && !needOutputCvt)
         {
-            appendParam(&launchParams.rcpOutScale);
+            appendParam(launchParams.rcpOutScale);
         }
-        appendParam(&kernel_input_tokens);
-        appendParam(&xqaParams.spec_decoding_packed_mask);
-        appendParam(&xqaParams.attention_sinks);
-        appendParam(&launchParams.kvCacheParams);
+        appendParam(kernel_input_tokens);
+        appendParam(xqaParams.spec_decoding_packed_mask);
+        appendParam(xqaParams.attention_sinks);
+        appendParam(launchParams.kvCacheParams);
         if (xqaParams.beam_width > 1)
         {
-            appendParam(&launchParams.beamSearchParams.value());
+            appendParam(launchParams.beamSearchParams.value());
         }
-        appendParam(&launchParams.batch_size);
-        appendParam(&launchParams.kv_scale_quant_orig);
-        appendParam(&launchParams.semaphores);
-        appendParam(&launchParams.scratch);
+        appendParam(launchParams.batch_size);
+        appendParam(launchParams.kv_scale_quant_orig);
+        appendParam(launchParams.semaphores);
+        appendParam(launchParams.scratch);
 
         uint32_t multi_block = 1;
         // if (xqaParams.multi_block_mode)
@@ -466,42 +506,42 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
         auto const gridDim = (dim3{multi_block, xqaParams.num_kv_heads * nbTokenBlocksPerGrp, xqaParams.batch_size});
         dim3 const blockDim(128, 1, 2);
 
-        cubinObj->launch(gridDim, blockDim, stream, kernelParams);
+        cubinObj->launch(gridDim, blockDim, stream, finalizeStableKernelParams(stableKernelParams));
     }
     else
     {
-        appendParam(&launchParams.num_k_heads);
+        appendParam(launchParams.num_k_heads);
         bool const allowSlidingWindow
             = !(isSpecDec && xqaParams.is_spec_dec_tree); // sliding windows does not support spec dec with tree-based
                                                           // token, only chained tokens
         if (allowSlidingWindow)
         {
-            appendParam(&launchParams.slidingWindowSize);
+            appendParam(launchParams.slidingWindowSize);
         }
-        appendParam(&launchParams.qScale);
-        appendParam(&launchParams.output);
+        appendParam(launchParams.qScale);
+        appendParam(launchParams.output);
         if (isFp8Out && !needOutputCvt)
         {
-            appendParam(&launchParams.rcpOutScale);
+            appendParam(launchParams.rcpOutScale);
         }
-        appendParam(&kernel_input_tokens);
+        appendParam(kernel_input_tokens);
         if (applyRoPEInXqaKernel)
         {
-            appendParam(&launchParams.ropeCosSin);
+            appendParam(launchParams.ropeCosSin);
         }
-        appendParam(&xqaParams.attention_sinks);
-        appendParam(&launchParams.kvCacheParams);
+        appendParam(xqaParams.attention_sinks);
+        appendParam(launchParams.kvCacheParams);
         if (xqaParams.beam_width > 1)
         {
-            appendParam(&launchParams.beamSearchParams.value());
+            appendParam(launchParams.beamSearchParams.value());
         }
-        appendParam(&launchParams.batch_size);
-        appendParam(&launchParams.kv_scale_quant_orig);
+        appendParam(launchParams.batch_size);
+        appendParam(launchParams.kv_scale_quant_orig);
         CUtensorMap tensorMap{};
         if (isGMMAKernel)
         {
             tensorMap = makeTensorMapForHopperXqaKVCache(mDriver, xqaParams, kv_cache_buffer);
-            appendParam(&tensorMap);
+            appendParam(tensorMap);
         }
         uint32_t specDecBlocks = 1;
         SpecDecParams specDecParams{};
@@ -512,22 +552,21 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
             TLLM_CHECK_DEBUG_WITH_INFO(xqaParams.max_past_kv_length + 1 <= xqaParams.cyclic_attention_window_size,
                 "SWA and speculative decoding cannot be used at the same time for now.");
             specDecParams = makeSpecDecParams();
-            appendParam(&specDecParams);
+            appendParam(specDecParams);
             specDecBlocks = divUp(specDecParams.qSeqLen, 64 / num_q_heads_over_kv);
         }
         if (isSkipSoftmax)
         {
             TLLM_CHECK_WITH_INFO(isGMMAKernel, "skip softmax is only supported for GMMA kernel for now.");
             TLLM_CHECK_WITH_INFO(!isSpecDec, "skip softmax is not supported with spec dec for now.");
-            appendParam(&xqaParams.skip_softmax_threshold_scale_factor);
+            appendParam(xqaParams.skip_softmax_threshold_scale_factor);
 #ifdef SKIP_SOFTMAX_STAT
-            appendParam(&xqaParams.skip_softmax_total_blocks);
-            appendParam(&xqaParams.skip_softmax_skipped_blocks);
+            appendParam(xqaParams.skip_softmax_total_blocks);
+            appendParam(xqaParams.skip_softmax_skipped_blocks);
 #endif
         }
-        appendParam(&launchParams.semaphores);
-        appendParam(&launchParams.scratch);
-        kernelParams[idxNextParam] = nullptr; // one extra nullptr at end as guard.
+        appendParam(launchParams.semaphores);
+        appendParam(launchParams.scratch);
         uint32_t multi_block = 1;
         if (xqaParams.multi_block_mode)
         {
@@ -545,7 +584,7 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
         auto const gridDim = (isGMMAKernel ? dim3{specDecBlocks, multi_block, nbKVHeads * xqaParams.batch_size}
                                            : dim3{multi_block, nbKVHeads, xqaParams.batch_size});
         dim3 const blockDim(128, 1, isGMMAKernel ? 3 : 2);
-        cubinObj->launch(gridDim, blockDim, stream, kernelParams);
+        cubinObj->launch(gridDim, blockDim, stream, finalizeStableKernelParams(stableKernelParams));
     }
     sync_check_cuda_error(stream);
 

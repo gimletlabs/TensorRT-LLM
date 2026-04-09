@@ -176,6 +176,7 @@ public:
         bool const needOutputCvt = (xqaParams.fp8_out_scale != nullptr);
         void* inputScratch = nullptr;
         buildXQALaunchParams(launchParams, inputScratch, needOutputCvt, xqaParams, kv_cache_buffer);
+        ScopedXQALaunchParamCleanup<KVCacheBuffer> launchParamsCleanup(launchParams, stream);
 
         // Build cu_seqlens, padding_offset, and rotary inv freq tensors
         BuildDecoderInfoParams<T> decoder_params{};

@@ -340,6 +340,7 @@ void XqaDispatcher::runImpl(
         XQALaunchParam<KVCacheBuffer> launchParams;
         void* inputScratch = nullptr;
         buildXQALaunchParams(launchParams, inputScratch, /*needOutputCvt*/ false, params, kv_cache_buffer);
+        ScopedXQALaunchParamCleanup<KVCacheBuffer> launchParamsCleanup(launchParams, params.stream);
 
         // Build cu_seqlens, padding_offset, and rotary inv freq tensors
         BuildDecoderInfoParams<T> decoder_params{};

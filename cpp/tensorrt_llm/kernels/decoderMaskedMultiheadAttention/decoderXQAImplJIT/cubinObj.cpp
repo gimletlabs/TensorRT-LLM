@@ -23,10 +23,23 @@
 #include "tensorrt_llm/kernels/decoderMaskedMultiheadAttention/decoderXQAImplCommon.h"
 #include <cuda_runtime_api.h>
 
+#include <cstring>
+
 TRTLLM_NAMESPACE_BEGIN
 
 namespace kernels::jit
 {
+
+namespace
+{
+
+struct LaunchConfigStorage
+{
+    CUlaunchAttribute attr{};
+    CUlaunchConfig config{};
+};
+
+} // namespace
 
 CubinObj::CubinObj(void const* buffer_, size_t buffer_size)
     : mInitialized(false)
@@ -143,7 +156,21 @@ void CubinObj::launch(dim3 gridDim, dim3 blockDim, CUstream hStream, void** kern
     CUlaunchConfig const cfg{
         gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z, mSharedMemBytes, hStream, &pdlAttr, 1};
 
-    TLLM_CU_CHECK(mDriver->cuLaunchKernelEx(&cfg, kernel(), kernelParams, /*extra=*/nullptr));
+    thread_local LaunchConfigStorage launchStorage{};
+    std::memcpy(&launchStorage.attr, &pdlAttr, sizeof(CUlaunchAttribute));
+    std::memcpy(&launchStorage.config, &cfg, sizeof(CUlaunchConfig));
+    launchStorage.config.attrs = &launchStorage.attr;
+
+    CUfunction launchKernel = nullptr;
+    TLLM_CU_CHECK(mDriver->cuKernelGetFunction(&launchKernel, kernel()));
+    TLLM_CHECK(launchKernel != nullptr);
+    if (mSharedMemBytes >= 46 * 1024)
+    {
+        TLLM_CU_CHECK(
+            mDriver->cuFuncSetAttribute(launchKernel, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, mSharedMemBytes));
+    }
+
+    TLLM_CU_CHECK(mDriver->cuLaunchKernelEx(&launchStorage.config, launchKernel, kernelParams, /*extra=*/nullptr));
 }
 
 void CubinObj::initialize()

@@ -29,6 +29,7 @@
 #include "xqaParams.h"
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 TRTLLM_NAMESPACE_BEGIN
@@ -236,6 +237,8 @@ struct XQALaunchParam
     void* scratch = nullptr;
     void* sparse_kv_block_offsets = nullptr;
     int32_t* sparse_seq_lengths = nullptr;
+    int32_t* cloned_kv_block_indices = nullptr;
+    int32_t* cloned_kv_sequence_lengths = nullptr;
 };
 
 // Setup launch params and ioScratch. ioScratch is for RoPE and output type conversion.
@@ -318,6 +321,26 @@ void buildXQALaunchParams(XQALaunchParam<KVCacheBuffer>& launchParams, void*& in
     launchParams.kvCacheParams.sequence_lengths = params.sequence_lengths;
     launchParams.kvCacheParams.capacity
         = params.paged_kv_cache ? params.max_blocks_per_sequence : params.max_attention_window_size;
+    if constexpr (std::is_same_v<KVCacheBuffer, KVBlockArray>)
+    {
+        const size_t kv_metadata_block_indices_size
+            = sizeof(int32_t) * batch_beam_size * 2 * launchParams.kvCacheParams.capacity;
+        const size_t kv_metadata_sequence_lengths_size = sizeof(int32_t) * batch_beam_size;
+        TLLM_CHECK_WITH_INFO(launchParams.kvCacheParams.blockIndices != nullptr, "Paged KV block indices are null.");
+        TLLM_CHECK_WITH_INFO(
+            launchParams.kvCacheParams.sequence_lengths != nullptr, "Paged KV sequence lengths are null.");
+
+        TLLM_CUDA_CHECK(cudaMallocAsync(
+            reinterpret_cast<void**>(&launchParams.cloned_kv_block_indices), kv_metadata_block_indices_size, params.stream));
+        TLLM_CUDA_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&launchParams.cloned_kv_sequence_lengths),
+            kv_metadata_sequence_lengths_size, params.stream));
+        TLLM_CUDA_CHECK(cudaMemcpyAsync(launchParams.cloned_kv_block_indices, launchParams.kvCacheParams.blockIndices,
+            kv_metadata_block_indices_size, cudaMemcpyDeviceToDevice, params.stream));
+        TLLM_CUDA_CHECK(cudaMemcpyAsync(launchParams.cloned_kv_sequence_lengths, launchParams.kvCacheParams.sequence_lengths,
+            kv_metadata_sequence_lengths_size, cudaMemcpyDeviceToDevice, params.stream));
+        launchParams.kvCacheParams.blockIndices = launchParams.cloned_kv_block_indices;
+        launchParams.kvCacheParams.sequence_lengths = launchParams.cloned_kv_sequence_lengths;
+    }
     // TODO: beam searching has not been implemented yet.
     if (params.beam_width > 1)
     {
@@ -329,6 +352,49 @@ void buildXQALaunchParams(XQALaunchParam<KVCacheBuffer>& launchParams, void*& in
         launchParams.beamSearchParams = std::nullopt;
     }
 }
+
+template <typename KVCacheBuffer>
+void cleanupXQALaunchParams(XQALaunchParam<KVCacheBuffer>& launchParams, cudaStream_t stream)
+{
+    if constexpr (std::is_same_v<KVCacheBuffer, KVBlockArray>)
+    {
+        if (launchParams.cloned_kv_block_indices != nullptr)
+        {
+            TLLM_CUDA_CHECK_FREE_RESOURCE(cudaFreeAsync(launchParams.cloned_kv_block_indices, stream));
+            launchParams.cloned_kv_block_indices = nullptr;
+        }
+        if (launchParams.cloned_kv_sequence_lengths != nullptr)
+        {
+            TLLM_CUDA_CHECK_FREE_RESOURCE(cudaFreeAsync(launchParams.cloned_kv_sequence_lengths, stream));
+            launchParams.cloned_kv_sequence_lengths = nullptr;
+        }
+        launchParams.kvCacheParams.blockIndices = nullptr;
+        launchParams.kvCacheParams.sequence_lengths = nullptr;
+    }
+}
+
+template <typename KVCacheBuffer>
+class ScopedXQALaunchParamCleanup
+{
+public:
+    ScopedXQALaunchParamCleanup(XQALaunchParam<KVCacheBuffer>& launchParams, cudaStream_t stream)
+        : mLaunchParams(launchParams)
+        , mStream(stream)
+    {
+    }
+
+    ScopedXQALaunchParamCleanup(ScopedXQALaunchParamCleanup const&) = delete;
+    ScopedXQALaunchParamCleanup& operator=(ScopedXQALaunchParamCleanup const&) = delete;
+
+    ~ScopedXQALaunchParamCleanup()
+    {
+        cleanupXQALaunchParams(mLaunchParams, mStream);
+    }
+
+private:
+    XQALaunchParam<KVCacheBuffer>& mLaunchParams;
+    cudaStream_t mStream;
+};
 
 template <typename T>
 std::optional<T> getGlobalVar(std::shared_ptr<tensorrt_llm::common::CUDADriverWrapper> const& driver, CUlibrary lib,

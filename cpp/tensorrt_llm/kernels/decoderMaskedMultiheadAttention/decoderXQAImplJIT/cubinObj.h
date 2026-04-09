@@ -65,9 +65,9 @@ public:
     }
 
 private:
-    [[nodiscard]] CUfunction kernel() const
+    [[nodiscard]] CUkernel kernel() const
     {
-        return reinterpret_cast<CUfunction>(mKernel);
+        return mKernel;
     }
 
     static constexpr char const* kFuncName = "kernel_mha";

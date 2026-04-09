@@ -73,6 +73,8 @@ public:
 
     CUresult cuLibraryUnload(CUlibrary library) const;
 
+    CUresult cuKernelGetFunction(CUfunction* pFunc, CUkernel kernel) const;
+
     CUresult cuKernelSetAttribute(CUfunction_attribute attrib, int val, CUkernel kernel, CUdevice dev) const;
 
     CUresult cuCtxGetDevice(CUdevice* device) const;
@@ -123,6 +125,7 @@ private:
         CUlibrary*, void const*, CUjit_option*, void**, unsigned int, CUlibraryOption*, void**, unsigned int);
     CUresult (*_cuLibraryGetGlobal)(CUdeviceptr*, size_t*, CUlibrary, char const*);
     CUresult (*_cuLibraryUnload)(CUlibrary);
+    CUresult (*_cuKernelGetFunction)(CUfunction*, CUkernel);
     CUresult (*_cuKernelSetAttribute)(CUfunction_attribute attrib, int val, CUkernel kernel, CUdevice dev);
     CUresult (*_cuCtxGetDevice)(CUdevice* device);
     CUresult (*_cuLinkAddFile)(CUlinkState, CUjitInputType, char const*, unsigned int, CUjit_option*, void**);
