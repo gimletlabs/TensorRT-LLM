@@ -172,7 +172,8 @@ void Runner::run(void* routingLogits, void* routingBias, int32_t numTokens, int3
         routingData.mDoSoftmaxBeforeTopK = routingMethodType == RoutingMethodType::RenormalizeNaive;
         routingData.mNormTopkProb = routingMethodType == RoutingMethodType::RenormalizeNaive;
 
-        // Pass-through raw pointer; kernels will cast to the proper InputT based on routing method
+        // When precomputed top-k ids/weights are supplied (thop), expertIds is non-null and logits are ignored.
+        // When computing from logits (e.g. TensorRT plugin), expertIds is null and routingLogits drives TopK.
         routingData.mPtrScores = expertIds == nullptr ? routingLogits : nullptr;
         //
         // Outputs

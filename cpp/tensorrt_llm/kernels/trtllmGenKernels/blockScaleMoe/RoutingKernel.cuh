@@ -582,11 +582,10 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts <= 1024 ? KernelPa
         }
         else
         {
-            // If params.mPtrTopKIds != nullptr, we don't need to store the weights
+            scoreIdx = params.mPtrTopKPacked[expandedIdx];
+            idx = scoreIdx.idx;
             if (params.mPtrTopKWeights != nullptr)
             {
-                scoreIdx = params.mPtrTopKPacked[expandedIdx];
-                idx = scoreIdx.idx;
                 params.mPtrTopKWeights[expandedIdx] = static_cast<OutputT>(scoreIdx.score);
             }
         }

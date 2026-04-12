@@ -69,8 +69,33 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts <= 1024 ? KernelPa
     }
 #endif
 
-    if (params.mPtrTopKIds != nullptr)
+    if (params.mPtrScores != nullptr)
     {
+        // Each warp represents a token: compute top-k from logits and write expert ids + weights.
+        BaseType score[VecSize];
+        int32_t idx[VecSize];
+
+        BaseType warpTopKScore[KernelParams::MaxNumTopExperts];
+        int32_t warpTopKExpertIdx[KernelParams::MaxNumTopExperts];
+
+        if (validToken)
+        {
+            routingTopKExperts<BaseType, InputT, VecSize, KernelParams::MaxNumTopExperts,
+                KernelParams::DoSoftmaxBeforeTopK>(warp, score, idx, warpTopKScore, warpTopKExpertIdx, laneIdx,
+                params.mNumExperts, params.mTopK, params.mPtrScores + scoreOffset, params.mNormTopkProb);
+
+            if (laneIdx < params.mTopK)
+            {
+                int offset = warpIdx * MaxNumExperts + warpTopKExpertIdx[laneIdx];
+                smemKIdx[offset] = static_cast<int8_t>(laneIdx);
+                params.mPtrTopKIds[warpIdx * params.mTopK + laneIdx] = warpTopKExpertIdx[laneIdx];
+                params.mPtrTopKWeights[warpIdx * params.mTopK + laneIdx] = OutputT{warpTopKScore[laneIdx]};
+            }
+        } // end if (validToken)
+    }
+    else if (params.mPtrTopKIds != nullptr)
+    {
+        // Precomputed top-k expert ids + weights (e.g. MoE thop); logits path is disabled.
         if (validToken)
         {
             if (laneIdx < params.mTopK)
@@ -87,33 +112,6 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts <= 1024 ? KernelPa
                 }
             }
         }
-    }
-    else if (params.mPtrScores != nullptr)
-    {
-        // in this case, each warp represents a token
-        BaseType score[VecSize];
-        int32_t idx[VecSize];
-
-        BaseType warpTopKScore[KernelParams::MaxNumTopExperts];
-        int32_t warpTopKExpertIdx[KernelParams::MaxNumTopExperts];
-
-        BaseType minScore = BaseType{-INFINITY};
-        if (validToken)
-        {
-            routingTopKExperts<BaseType, InputT, VecSize, KernelParams::MaxNumTopExperts,
-                KernelParams::DoSoftmaxBeforeTopK>(warp, score, idx, warpTopKScore, warpTopKExpertIdx, laneIdx,
-                params.mNumExperts, params.mTopK, params.mPtrScores + scoreOffset, params.mNormTopkProb);
-
-            if (laneIdx < params.mTopK)
-            {
-                int offset = warpIdx * MaxNumExperts + warpTopKExpertIdx[laneIdx];
-                smemKIdx[offset] = static_cast<int8_t>(laneIdx);
-                if (params.mPtrTopKWeights != nullptr)
-                {
-                    params.mPtrTopKWeights[warpIdx * params.mTopK + laneIdx] = OutputT{warpTopKScore[laneIdx]};
-                }
-            }
-        } // end if (validToken)
     }
     __syncthreads();
 
@@ -405,22 +403,7 @@ __global__ void routingIndicesDynBlockKernel(KernelParams params)
     // ── Phase 1: TopK — one warp per token (loop only when numTokens > numWarps) ──
     for (int tokenIdx = warpIdx; tokenIdx < params.mNumTokens; tokenIdx += numWarps)
     {
-        if (params.mPtrTopKIds != nullptr)
-        {
-            if (laneIdx < params.mTopK)
-            {
-                auto expertIdx = params.mPtrTopKIds[tokenIdx * params.mTopK + laneIdx];
-                if (expertIdx > -1 && expertIdx < params.mNumExperts)
-                {
-                    smemKIdx[tokenIdx * MaxNumExperts + expertIdx] = static_cast<int8_t>(laneIdx);
-                }
-                else
-                {
-                    params.mPtrExpandedIdxToPermutedIdx[tokenIdx * params.mTopK + laneIdx] = int32_t{-1};
-                }
-            }
-        }
-        else if (params.mPtrScores != nullptr)
+        if (params.mPtrScores != nullptr)
         {
             BaseType score[VecSize];
             int32_t idx[VecSize];
@@ -435,9 +418,22 @@ __global__ void routingIndicesDynBlockKernel(KernelParams params)
             if (laneIdx < params.mTopK)
             {
                 smemKIdx[tokenIdx * MaxNumExperts + warpTopKExpertIdx[laneIdx]] = static_cast<int8_t>(laneIdx);
-                if (params.mPtrTopKWeights != nullptr)
+                params.mPtrTopKIds[tokenIdx * params.mTopK + laneIdx] = warpTopKExpertIdx[laneIdx];
+                params.mPtrTopKWeights[tokenIdx * params.mTopK + laneIdx] = OutputT{warpTopKScore[laneIdx]};
+            }
+        }
+        else if (params.mPtrTopKIds != nullptr)
+        {
+            if (laneIdx < params.mTopK)
+            {
+                auto expertIdx = params.mPtrTopKIds[tokenIdx * params.mTopK + laneIdx];
+                if (expertIdx > -1 && expertIdx < params.mNumExperts)
                 {
-                    params.mPtrTopKWeights[tokenIdx * params.mTopK + laneIdx] = OutputT{warpTopKScore[laneIdx]};
+                    smemKIdx[tokenIdx * MaxNumExperts + expertIdx] = static_cast<int8_t>(laneIdx);
+                }
+                else
+                {
+                    params.mPtrExpandedIdxToPermutedIdx[tokenIdx * params.mTopK + laneIdx] = int32_t{-1};
                 }
             }
         }
@@ -448,6 +444,10 @@ __global__ void routingIndicesDynBlockKernel(KernelParams params)
                 auto expandedIdx = tokenIdx * params.mTopK + laneIdx;
                 auto scoreIdx = params.mPtrTopKPacked[expandedIdx];
                 smemKIdx[tokenIdx * MaxNumExperts + static_cast<int>(scoreIdx.idx)] = static_cast<int8_t>(laneIdx);
+                if (params.mPtrTopKIds != nullptr)
+                {
+                    params.mPtrTopKIds[expandedIdx] = static_cast<int32_t>(scoreIdx.idx);
+                }
                 if (params.mPtrTopKWeights != nullptr)
                 {
                     params.mPtrTopKWeights[expandedIdx] = static_cast<OutputT>(scoreIdx.score);

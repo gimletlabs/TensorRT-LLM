@@ -64,13 +64,14 @@ struct DataBase
 
     // optional: if `nullptr`, it is not filled
     // dim: [mNumTokens, mTopK]
-    // When mPtrTopKIds is provided, mPtrTopKWeights must be also provided as inputs.
-    // Otherwise, mPtrTopKWeights is the output scores of the topK experts.
+    // `routingRenormalize`: when `mPtrScores` is set (logits path), this holds per-slot masses (output).
+    // When `mPtrScores` is null and ids are precomputed (e.g. MoE thop), this may alias the precomputed
+    // top-k weight input together with `mPtrTopKIds`.
     void* mPtrTopKWeights{nullptr};
     // optional: if `nullptr`, it is not filled
     // dim: [mNumTokens, mTopK]
-    // mPtrTopKIds[i] is the index of the expert for the i-th token in the top-k experts
-    // Together with mPtrTopKWeights, they form the top-k experts for each token
+    // `routingRenormalize`: output expert indices when computing from `mPtrScores`; input precomputed ids
+    // when `mPtrScores` is null (MoE thop supplies top-k ids/weights without logits).
     int32_t* mPtrTopKIds{nullptr};
 
     // optional: if `nullptr`, scores are used directly as input.
