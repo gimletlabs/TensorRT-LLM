@@ -23,7 +23,6 @@
 #include "tensorrt_llm/common/cudaUtils.h"
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/KernelRunner.h"
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/trtllmGen_bmm_export/trtllm/gen/DtypeDecl.h"
-#include "tensorrt_llm/thop/thUtils.h"
 #include <set>
 #include <string>
 
@@ -34,13 +33,24 @@ namespace kernels
 namespace trtllmGenFp8BlockScaleMoe
 {
 
+inline int nextPowerOfTwo(int v)
+{
+    --v;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    return ++v;
+}
+
 inline std::set<int32_t> computeSelectedTileN(std::vector<int32_t> const& supported_tile_nums, int64_t const num_tokens,
     int64_t const top_k, int64_t const num_local_experts)
 {
     float const avg_tokens_per_expert = static_cast<float>(num_tokens * top_k) / num_local_experts;
     // assume supported_tile_nums is sorted
-    int32_t tile_tokens_dim = std::clamp(
-        torch_ext::nextPowerOfTwo(avg_tokens_per_expert), supported_tile_nums.front(), supported_tile_nums.back());
+    int32_t tile_tokens_dim
+        = std::clamp(nextPowerOfTwo(avg_tokens_per_expert), supported_tile_nums.front(), supported_tile_nums.back());
     auto it = std::find(supported_tile_nums.begin(), supported_tile_nums.end(), tile_tokens_dim);
 
     std::set<int32_t> selected_tile_nums;
