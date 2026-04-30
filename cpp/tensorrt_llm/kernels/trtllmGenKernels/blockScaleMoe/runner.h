@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -179,7 +179,7 @@ class Runner
 {
 public:
     explicit Runner(batchedGemm::trtllm::gen::Dtype dtypeAct, batchedGemm::trtllm::gen::Dtype dtypeWeights,
-        bool useDeepSeekFp8, int tileTokensDim, ActType actType);
+        bool useDeepSeekFp8, int tileTokensDim, ActType actType, bool forceNonFusedActivation = false);
 
     size_t getWorkspaceSizeInBytes(int32_t topK, int32_t hiddenSize, int32_t intermediateSize, int32_t numExperts,
         int32_t numTokens, int32_t configIndex) const;
@@ -310,6 +310,10 @@ struct MoERunnerArgs
     float* output1_scales_scalar = nullptr;
     float* output1_scales_gate_scalar = nullptr;
     float* output2_scales_scalar = nullptr;
+    // Optional per-expert factors applied inside the standalone activation kernel.
+    // input: [num_experts, intermediate_size * 2], output: [num_experts, intermediate_size].
+    float* activation_input_scale = nullptr;
+    float* activation_output_scale = nullptr;
 
     // Output:
     void* output = nullptr;
@@ -401,6 +405,7 @@ private:
 
 private:
     PermuteGemm1::Runner mPermuteGemm1;
+    PermuteGemm1::Runner mPermuteGemm1NonFused;
     Gemm2::Runner mGemm2;
     ActType mActType;
 

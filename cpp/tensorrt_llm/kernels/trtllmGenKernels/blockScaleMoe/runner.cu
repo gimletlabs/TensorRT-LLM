@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -217,8 +217,8 @@ void Runner::run(void* routingLogits, void* routingBias, int32_t numTokens, int3
 namespace PermuteGemm1
 {
 
-tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(
-    btg::Dtype dtypeAct, btg::Dtype dtypeWeights, int32_t tileTokensDim, bool useDeepSeekFp8, ActType actType)
+tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(btg::Dtype dtypeAct, btg::Dtype dtypeWeights,
+    int32_t tileTokensDim, bool useDeepSeekFp8, ActType actType, bool forceNonFusedActivation)
 {
     bool is_gated_activation = actType == ActType::SwiGlu;
     tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions options;
@@ -232,7 +232,7 @@ tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(
             .dtypeC = dtypeAct,
             .actType = actType,
             .deepSeekFp8 = useDeepSeekFp8,
-            .fusedAct = !useDeepSeekFp8,
+            .fusedAct = !(useDeepSeekFp8 || forceNonFusedActivation),
             .routeAct = true,
             .staticBatch = false,
             .transposeMmaOutput = true,
@@ -265,12 +265,13 @@ tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(
     return options;
 }
 
-Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int tileTokensDim, ActType actType)
+Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int tileTokensDim, ActType actType,
+    bool forceNonFusedActivation)
     : mDtypeAct(dtypeAct)
     , mDtypeWeights(dtypeWeights)
     , mTileTokensDim(tileTokensDim)
     , mRunner(tensorrt_llm::kernels::TrtllmGenBatchedGemmRunner(
-          getOptions(mDtypeAct, mDtypeWeights, mTileTokensDim, useDeepSeekFp8, actType)))
+          getOptions(mDtypeAct, mDtypeWeights, mTileTokensDim, useDeepSeekFp8, actType, forceNonFusedActivation)))
     , mActType(actType)
 {
 }
@@ -443,9 +444,19 @@ std::string Runner::getKernelNameFromConfigIndex(int32_t configIndex) const
 
 namespace MoE
 {
+namespace
+{
+bool hasActivationScale(MoERunnerArgs const& args)
+{
+    return args.activation_input_scale != nullptr || args.activation_output_scale != nullptr;
+}
+} // namespace
+
 Runner::Runner(
     btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int32_t tileTokensDim, ActType actType)
     : mPermuteGemm1(PermuteGemm1::Runner(dtypeAct, dtypeWeights, useDeepSeekFp8, tileTokensDim, actType))
+    , mPermuteGemm1NonFused(
+          PermuteGemm1::Runner(dtypeAct, dtypeWeights, useDeepSeekFp8, tileTokensDim, actType, true))
     , mGemm2(Gemm2::Runner(dtypeAct, dtypeWeights, btg::Dtype::Bfloat16, useDeepSeekFp8, tileTokensDim))
     , mActType(actType)
 {
@@ -487,15 +498,18 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
     // Setup activation data
     activationData.mDtypeElt = args.mDtypeElt;
     activationData.mUsePdl = true;
-    activationData.mUseDeepSeekFp8 = true;
+    activationData.mUseDeepSeekFp8 = args.mUseDeepSeekFp8 || hasActivationScale(args);
     activationData.inPtr = workspace.gemm1_output;
     activationData.outPtr = workspace.activation_output;
     activationData.inDqSfsPtr = workspace.gemm1_output_scale;
     activationData.outDqSfsPtr = workspace.activation_output_scale;
+    activationData.inScalePtr = args.activation_input_scale;
+    activationData.outScalePtr = args.activation_output_scale;
     activationData.innerDim = args.intermediate_size * (mActType == ActType::SwiGlu ? 2 : 1);
     activationData.topK = args.top_k;
     activationData.numTokens = args.num_tokens;
     activationData.expandedIdxToPermutedIdx = workspace.expanded_idx_to_permuted_idx;
+    activationData.expertIndexes = workspace.routing_expert_indexes;
 
     activationData.totalNumPaddedTokens = workspace.total_num_padded_tokens;
 
@@ -532,9 +546,18 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
 std::tuple<int32_t, int32_t> Runner::getWorkspaceSizeInBytes(MoERunnerArgs const& args, int64_t configIndex) const
 {
     auto const& config = mPassingConfigs[configIndex];
+    auto const& gemm1Runner = hasActivationScale(args) ? mPermuteGemm1NonFused : mPermuteGemm1;
+    int32_t gemm1Config = config.gemm1Config;
+    if (hasActivationScale(args))
+    {
+        gemm1Config = mPermuteGemm1NonFused.getDefaultValidConfigIndex(args.top_k, args.hidden_size,
+            args.intermediate_size, args.local_num_experts, args.num_tokens,
+            args.valid_hidden_size.value_or(args.hidden_size),
+            args.valid_intermediate_size.value_or(args.intermediate_size));
+    }
 
-    auto workspace_size_fc1 = static_cast<int32_t>(mPermuteGemm1.getWorkspaceSizeInBytes(args.top_k, args.hidden_size,
-        args.intermediate_size, args.local_num_experts, args.num_tokens, config.gemm1Config));
+    auto workspace_size_fc1 = static_cast<int32_t>(gemm1Runner.getWorkspaceSizeInBytes(args.top_k, args.hidden_size,
+        args.intermediate_size, args.local_num_experts, args.num_tokens, gemm1Config));
     auto workspace_size_fc2 = static_cast<int32_t>(mGemm2.getWorkspaceSizeInBytes(args.top_k, args.hidden_size,
         args.intermediate_size, args.local_num_experts, args.num_tokens, config.gemm2Config));
     return std::make_tuple(workspace_size_fc1, workspace_size_fc2);
@@ -597,22 +620,40 @@ void Runner::run(
     void* hidden_states_scale_linear{args.hidden_states_scale};
 
     auto const& config = mPassingConfigs[configIndex];
+    bool const useNonFusedActivation = hasActivationScale(args);
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || mActType == ActType::SwiGlu,
+        "Activation input/output scale factors are only supported for SwiGLU.");
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.activation_output != nullptr,
+        "Activation input/output scale factors require activation output workspace.");
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.routing_expert_indexes != nullptr,
+        "Activation input/output scale factors require routing expert indexes.");
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.gemm1_output_scale != nullptr,
+        "Activation input/output scale factors require GEMM1 output scales.");
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.activation_output_scale != nullptr,
+        "Activation input/output scale factors require activation output scales.");
+    auto const& gemm1Runner = useNonFusedActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
+    int32_t gemm1Config = config.gemm1Config;
+    if (useNonFusedActivation)
+    {
+        gemm1Config = mPermuteGemm1NonFused.getDefaultValidConfigIndex(args.top_k, args.hidden_size,
+            args.intermediate_size, args.local_num_experts, args.num_tokens,
+            args.valid_hidden_size.value_or(args.hidden_size),
+            args.valid_intermediate_size.value_or(args.intermediate_size));
+    }
 
-    mPermuteGemm1.run(args.hidden_states, hidden_states_scale_linear, args.gemm1_weights, args.gemm1_weights_scale,
+    gemm1Runner.run(args.hidden_states, hidden_states_scale_linear, args.gemm1_weights, args.gemm1_weights_scale,
         workspace.expert_weights, args.output1_scales_scalar, args.output1_scales_gate_scalar, args.gemm1_bias,
         args.gemm1_alpha, args.gemm1_beta, args.gemm1_clamp_limit, workspace.gemm1_output, workspace.gemm1_output_scale,
         args.top_k, args.hidden_size, args.intermediate_size, args.local_num_experts, args.num_tokens,
         workspace.permuted_idx_to_token_idx, workspace.num_non_exiting_ctas, workspace.total_num_padded_tokens,
         workspace.cta_idx_xy_to_batch_idx, workspace.cta_idx_xy_to_mn_limit, workspace.bmm1_workspace,
-        args.mUseRoutingScalesOnInput, device, stream, config.gemm1Config,
-        args.valid_hidden_size.value_or(args.hidden_size),
+        args.mUseRoutingScalesOnInput, device, stream, gemm1Config, args.valid_hidden_size.value_or(args.hidden_size),
         args.valid_intermediate_size.value_or(args.intermediate_size));
 
-    // We do not fuse activation with FC1 for DeepSeek FP8 due to the weights shuffling constraint.
+    // DeepSeek FP8 and per-expert activation scales require a standalone activation after FC1.
     void* gemm2_input = workspace.gemm1_output;
     void* gemm2_input_scale = workspace.gemm1_output_scale;
-    // We do activation only for DeepSeek FP8, as cubins do not have fused activation.
-    if (args.mDtypeElt == btg::Dtype::E4m3 && args.mUseDeepSeekFp8)
+    if (args.mDtypeElt == btg::Dtype::E4m3 && (args.mUseDeepSeekFp8 || useNonFusedActivation))
     {
         // Run activation
         moe::dev::activation::run(activationData, stream);

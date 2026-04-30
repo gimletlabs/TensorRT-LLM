@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -347,11 +347,14 @@ struct Data
     void* outPtr;
     float* inDqSfsPtr = nullptr;
     float* outDqSfsPtr = nullptr;
+    float const* inScalePtr = nullptr;
+    float const* outScalePtr = nullptr;
 
     int32_t innerDim;
     int32_t numTokens;
     int32_t topK;
     int32_t* expandedIdxToPermutedIdx;
+    int32_t* expertIndexes = nullptr;
 
     int32_t const* totalNumPaddedTokens;
 };
@@ -368,11 +371,14 @@ struct KernelParams
 
     float* inDqSfsPtr = nullptr;
     float* outDqSfsPtr = nullptr;
+    float const* inScalePtr = nullptr;
+    float const* outScalePtr = nullptr;
 
     int32_t innerDim;
     int32_t numTokens;
     int32_t topK;
     int32_t* expandedIdxToPermutedIdx;
+    int32_t* expertIndexes = nullptr;
 
     int32_t const* totalNumPaddedTokens;
 
@@ -384,8 +390,11 @@ struct KernelParams
         params.outPtr = (Type*) data.outPtr;
         params.inDqSfsPtr = data.inDqSfsPtr;
         params.outDqSfsPtr = data.outDqSfsPtr;
+        params.inScalePtr = data.inScalePtr;
+        params.outScalePtr = data.outScalePtr;
 
         params.expandedIdxToPermutedIdx = data.expandedIdxToPermutedIdx;
+        params.expertIndexes = data.expertIndexes;
 
         params.innerDim = data.innerDim;
         params.numTokens = data.numTokens;

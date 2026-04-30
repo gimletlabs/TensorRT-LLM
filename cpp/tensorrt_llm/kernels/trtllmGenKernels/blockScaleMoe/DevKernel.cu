@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,6 +56,14 @@ inline __device__ float silu(float x)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
+__device__ __forceinline__ int32_t getExpertIdx(KernelParams const& params, int32_t expandedIdx)
+{
+    return params.expertIndexes[expandedIdx];
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename KernelParams>
 __global__ void activationKernel(KernelParams params)
 {
     using Type = typename KernelParams::Type;
@@ -77,19 +85,29 @@ __global__ void activationKernel(KernelParams params)
             int const expandedIdx = tokenIdx * params.topK + k;
             int const permutedIdx = params.expandedIdxToPermutedIdx[expandedIdx];
             if (permutedIdx == -1)
+            {
                 continue;
+            }
+            int const expertIdx = (params.inScalePtr || params.outScalePtr) ? getExpertIdx(params, expandedIdx) : 0;
 
             // Loop over hidden dim
             for (int hiddenIdx = threadIdx.x + blockDim.x * blockIdx.x; hiddenIdx < params.innerDim / 2;
                  hiddenIdx += blockDim.x * gridDim.x)
             {
-                int const baseIdx = permutedIdx * params.innerDim + hiddenIdx;
+                int const in1Idx = permutedIdx * params.innerDim + hiddenIdx;
+                int const in2Idx = in1Idx + params.innerDim / 2;
+                int const inScale1Idx = expertIdx * params.innerDim + hiddenIdx;
+                int const inScale2Idx = inScale1Idx + params.innerDim / 2;
+                int const outScaleIdx = expertIdx * (params.innerDim / 2) + hiddenIdx;
 
-                float x1 = (float) params.inPtr[baseIdx];
-                float x2 = (float) params.inPtr[baseIdx + params.innerDim / 2];
+                float const inputScale1 = params.inScalePtr ? params.inScalePtr[inScale1Idx] : 1.0f;
+                float const inputScale2 = params.inScalePtr ? params.inScalePtr[inScale2Idx] : 1.0f;
+                float const outputScale = params.outScalePtr ? params.outScalePtr[outScaleIdx] : 1.0f;
+                float x1 = inputScale1 * static_cast<float>(params.inPtr[in1Idx]);
+                float x2 = inputScale2 * static_cast<float>(params.inPtr[in2Idx]);
 
                 float act = silu(x2);
-                Type out = (Type) (act * x1);
+                Type out = static_cast<Type>(outputScale * act * x1);
 
                 int const outIdx = permutedIdx * (params.innerDim / 2) + hiddenIdx;
                 params.outPtr[outIdx] = out;
@@ -288,18 +306,28 @@ __global__ void activationDeepSeekKernel(KernelParams params)
                     {
                         continue;
                     }
+                    int const expertIdx
+                        = (params.inScalePtr || params.outScalePtr) ? getExpertIdx(params, expandedIdx) : 0;
 
                     // Process blocks for this CTA
-                    int const baseIdx = permutedIdx * params.innerDim + hiddenIdx;
+                    int const in1Idx = permutedIdx * params.innerDim + hiddenIdx;
+                    int const in2Idx = in1Idx + params.innerDim / 2;
+                    int const inScale1Idx = expertIdx * params.innerDim + hiddenIdx;
+                    int const inScale2Idx = inScale1Idx + params.innerDim / 2;
+                    int const outScaleIdx = expertIdx * (params.innerDim / 2) + hiddenIdx;
 
                     int const scale1Idx = permutedIdx + totalNumPaddedTokens * (hiddenIdx / 128);
                     int const scale2Idx
                         = permutedIdx + totalNumPaddedTokens * ((hiddenIdx / 128) + (params.innerDim / 2 / 128));
 
-                    scale1Arr[tokenInCtaIdx] = params.inDqSfsPtr[scale1Idx];
-                    scale2Arr[tokenInCtaIdx] = params.inDqSfsPtr[scale2Idx];
-                    dataX1Arr[tokenInCtaIdx] = static_cast<float>(params.inPtr[baseIdx]);
-                    dataX2Arr[tokenInCtaIdx] = static_cast<float>(params.inPtr[baseIdx + params.innerDim / 2]);
+                    float const inputScale1 = params.inScalePtr ? params.inScalePtr[inScale1Idx] : 1.0f;
+                    float const inputScale2 = params.inScalePtr ? params.inScalePtr[inScale2Idx] : 1.0f;
+                    float const outputScale = params.outScalePtr ? params.outScalePtr[outScaleIdx] : 1.0f;
+                    scale1Arr[tokenInCtaIdx] = inputScale1 * params.inDqSfsPtr[scale1Idx];
+                    scale2Arr[tokenInCtaIdx] = inputScale2 * params.inDqSfsPtr[scale2Idx];
+                    dataX1Arr[tokenInCtaIdx] = static_cast<float>(params.inPtr[in1Idx]);
+                    dataX2Arr[tokenInCtaIdx] = static_cast<float>(params.inPtr[in2Idx]);
+                    outArr[tokenInCtaIdx] = outputScale;
                 }
 
 #pragma unroll
@@ -308,7 +336,7 @@ __global__ void activationDeepSeekKernel(KernelParams params)
                     float x1 = scale1Arr[tokenInCtaIdx] * dataX1Arr[tokenInCtaIdx];
                     float x2 = scale2Arr[tokenInCtaIdx] * dataX2Arr[tokenInCtaIdx];
                     float act = silu(x2);
-                    float out = act * x1;
+                    float out = outArr[tokenInCtaIdx] * act * x1;
                     outArr[tokenInCtaIdx] = out;
                     absOutArr[tokenInCtaIdx] = fabsf(out);
                 }
@@ -366,6 +394,12 @@ __global__ void activationDeepSeekKernel(KernelParams params)
 
 void run(Data const& data, void* stream)
 {
+    if (data.inScalePtr != nullptr || data.outScalePtr != nullptr)
+    {
+        TLLM_CHECK_WITH_INFO(data.expertIndexes != nullptr, "Activation scales require expert indexes.");
+        TLLM_CHECK_WITH_INFO(data.innerDim % 2 == 0, "Activation scales require a gated activation input.");
+    }
+
     if (data.mDtypeElt == tg::Dtype::E2m1)
     {
         // Note: this should be unreachable because the options are checked beforehand.
