@@ -498,7 +498,7 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
     // Setup activation data
     activationData.mDtypeElt = args.mDtypeElt;
     activationData.mUsePdl = true;
-    activationData.mUseDeepSeekFp8 = args.mUseDeepSeekFp8 || hasActivationScale(args);
+    activationData.mUseDeepSeekFp8 = args.mUseDeepSeekFp8;
     activationData.inPtr = workspace.gemm1_output;
     activationData.outPtr = workspace.activation_output;
     activationData.inDqSfsPtr = workspace.gemm1_output_scale;
@@ -625,14 +625,20 @@ void Runner::run(
     bool const useNonFusedActivation = hasActivationScale(args);
     TLLM_CHECK_WITH_INFO(!useNonFusedActivation || mActType == ActType::SwiGlu,
         "Activation input/output scale factors are only supported for SwiGLU.");
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || args.mDtypeElt != btg::Dtype::E2m1,
+        "Activation input/output scale factors are not supported for E2m1 activations.");
+    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || args.mDtypeElt != btg::Dtype::MxE4m3,
+        "Activation input/output scale factors are not supported for MxE4m3 activations.");
     TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.activation_output != nullptr,
         "Activation input/output scale factors require activation output workspace.");
     TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.routing_expert_indexes != nullptr,
         "Activation input/output scale factors require routing expert indexes.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.gemm1_output_scale != nullptr,
-        "Activation input/output scale factors require GEMM1 output scales.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.activation_output_scale != nullptr,
-        "Activation input/output scale factors require activation output scales.");
+    TLLM_CHECK_WITH_INFO(!(args.mUseDeepSeekFp8 || useNonFusedActivation) || args.mDtypeElt == btg::Dtype::E4m3,
+        "Standalone activation is only supported for E4m3 activations.");
+    TLLM_CHECK_WITH_INFO(
+        !args.mUseDeepSeekFp8 || workspace.gemm1_output_scale != nullptr, "DeepSeek FP8 requires GEMM1 output scales.");
+    TLLM_CHECK_WITH_INFO(!args.mUseDeepSeekFp8 || workspace.activation_output_scale != nullptr,
+        "DeepSeek FP8 requires activation output scales.");
     auto const& gemm1Runner = useNonFusedActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
     int32_t gemm1Config = config.gemm1Config;
     if (useNonFusedActivation)

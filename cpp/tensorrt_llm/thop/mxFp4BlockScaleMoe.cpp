@@ -50,7 +50,10 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     std::optional<double> const routed_scaling_factor, int64_t const tile_tokens_dim, int64_t const routing_method_type,
     btg::Dtype const dtype, MoeRunnerType& moe_runner, int64_t moeConfigIndex,
     torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
-    torch::optional<torch::Tensor> const& out_tensor)
+    torch::optional<torch::Tensor> const& out_tensor,
+    torch::optional<torch::Tensor> const& activation_input_scale = torch::nullopt,
+    torch::optional<torch::Tensor> const& activation_output_scale = torch::nullopt,
+    torch::optional<torch::Tensor> const& finalize_input_scale = torch::nullopt)
 {
     TORCH_CHECK(tensorrt_llm::common::isSM100Family(), "Only SM100f is supported by MXFP4 block scale MOE");
     TORCH_CHECK(tile_tokens_dim == 8 || tile_tokens_dim == 16 || tile_tokens_dim == 32 || tile_tokens_dim == 64
@@ -190,6 +193,15 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     args.routed_scaling_factor = routed_scaling_factor.value_or(1.0);
     args.intermediate_size = intermediate_size;
     args.valid_intermediate_size = valid_intermediate_size;
+    args.activation_input_scale
+        = activation_input_scale.has_value() ? activation_input_scale.value().data_ptr<float>() : nullptr;
+    args.activation_output_scale
+        = activation_output_scale.has_value() ? activation_output_scale.value().data_ptr<float>() : nullptr;
+    args.finalize_input_scale = finalize_input_scale.has_value() ? finalize_input_scale.value().data_ptr<float>() : nullptr;
+
+    bool const use_activation_scale = activation_input_scale.has_value() || activation_output_scale.has_value();
+    TORCH_CHECK(!use_activation_scale || dtype != btg::Dtype::MxE4m3,
+        "activation_input_scale and activation_output_scale are not supported for MxE4m3 activations.");
 
     // allocate workspace for routing kernel
     if (routing_logits.has_value() && topk_ids.has_value())
@@ -203,9 +215,10 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     int32_t max_num_padded_tokens
         = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxPermutedPaddedCount(
             args.num_tokens, top_k, num_experts, tile_tokens_dim);
+    int64_t const gemm1_output_size = use_activation_scale ? 2 * intermediate_size : intermediate_size;
     int32_t max_num_padded_tokens_gemm1
         = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::maybeGetMinTokenCount(
-            max_num_padded_tokens, args.intermediate_size, btg::dtypeGetNumBits(args.mDtypeElt));
+            max_num_padded_tokens, gemm1_output_size, btg::dtypeGetNumBits(args.mDtypeElt));
     int32_t max_num_padded_tokens_gemm2
         = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::maybeGetMinTokenCount(
             max_num_padded_tokens, args.hidden_size, btg::dtypeGetNumBits(args.mDtypeOut));
@@ -232,14 +245,21 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     auto const gemm1_output_type
         = dtype == btg::Dtype::Bfloat16 ? at::ScalarType::BFloat16 : at::ScalarType::Float8_e4m3fn;
     at::Tensor gemm1_output = at::detail::empty_cuda(
-        {max_num_padded_tokens_gemm1, intermediate_size}, gemm1_output_type, routing_device, std::nullopt);
+        {max_num_padded_tokens_gemm1, gemm1_output_size}, gemm1_output_type, routing_device, std::nullopt);
 
     std::optional<at::Tensor> gemm1_output_scale;
     if (dtype == btg::Dtype::MxE4m3)
     {
         int64_t sf_size
-            = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens_gemm1, intermediate_size / sf_block_size);
+            = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens_gemm1, gemm1_output_size / sf_block_size);
         gemm1_output_scale = at::detail::empty_cuda({sf_size}, SF_DTYPE, routing_device, std::nullopt);
+    }
+
+    std::optional<at::Tensor> activation_output;
+    if (use_activation_scale)
+    {
+        activation_output = at::detail::empty_cuda(
+            {max_num_padded_tokens_gemm1, intermediate_size}, gemm1_output_type, routing_device, std::nullopt);
     }
 
     at::Tensor gemm2_output = at::detail::empty_cuda(
@@ -421,6 +441,42 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
             output2_scale_scalar->sizes()[0] == local_num_experts, "output2_scales_scalar has incorrect dim 0.");
     }
 
+    if (activation_input_scale.has_value())
+    {
+        TORCH_CHECK(activation_input_scale->scalar_type() == at::ScalarType::Float,
+            "activation_input_scale must be float, got %s.", c10::toString(activation_input_scale->scalar_type()));
+        TORCH_CHECK(activation_input_scale->dim() == 2, "activation_input_scale must be 2D.");
+        TORCH_CHECK(activation_input_scale->sizes()[0] == num_experts, "activation_input_scale has incorrect dim 0.");
+        TORCH_CHECK(activation_input_scale->sizes()[1] == 2 * intermediate_size,
+            "activation_input_scale has incorrect dim 1.");
+        TORCH_CHECK(
+            activation_input_scale->device() == hidden_states.device(), "activation_input_scale must match input device.");
+    }
+
+    if (activation_output_scale.has_value())
+    {
+        TORCH_CHECK(activation_output_scale->scalar_type() == at::ScalarType::Float,
+            "activation_output_scale must be float, got %s.", c10::toString(activation_output_scale->scalar_type()));
+        TORCH_CHECK(activation_output_scale->dim() == 2, "activation_output_scale must be 2D.");
+        TORCH_CHECK(activation_output_scale->sizes()[0] == num_experts, "activation_output_scale has incorrect dim 0.");
+        TORCH_CHECK(
+            activation_output_scale->sizes()[1] == intermediate_size, "activation_output_scale has incorrect dim 1.");
+        TORCH_CHECK(activation_output_scale->device() == hidden_states.device(),
+            "activation_output_scale must match input device.");
+    }
+
+    if (finalize_input_scale.has_value())
+    {
+        TORCH_CHECK(finalize_input_scale->scalar_type() == at::ScalarType::Float,
+            "finalize_input_scale must be float, got %s.", c10::toString(finalize_input_scale->scalar_type()));
+        TORCH_CHECK(finalize_input_scale->dim() == 2, "finalize_input_scale must be 2D.");
+        TORCH_CHECK(finalize_input_scale->sizes()[0] == num_experts, "finalize_input_scale has incorrect dim 0.");
+        TORCH_CHECK(finalize_input_scale->sizes()[1] == args.output_hidden_size,
+            "finalize_input_scale has incorrect dim 1.");
+        TORCH_CHECK(
+            finalize_input_scale->device() == hidden_states.device(), "finalize_input_scale must match input device.");
+    }
+
     // allocate or use provided output
     at::Tensor output;
     if (out_tensor.has_value())
@@ -458,6 +514,8 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     workspace.gemm1_output = gemm1_output.data_ptr();
     workspace.gemm1_output_scale
         = gemm1_output_scale.has_value() ? reinterpret_cast<float*>(gemm1_output_scale->data_ptr()) : nullptr;
+    workspace.activation_output = activation_output.has_value() ? activation_output->data_ptr() : nullptr;
+    workspace.activation_output_scale = nullptr;
 
     // gemm2 intermediate ws
     workspace.gemm2_output = gemm2_output.data_ptr();
@@ -626,7 +684,10 @@ public:
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
         int64_t routing_method_type, std::vector<int64_t> tile_config_pair,
         torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
-        torch::optional<torch::Tensor> const& output)
+        torch::optional<torch::Tensor> const& output,
+        torch::optional<torch::Tensor> const& activation_input_scale = torch::nullopt,
+        torch::optional<torch::Tensor> const& activation_output_scale = torch::nullopt,
+        torch::optional<torch::Tensor> const& finalize_input_scale = torch::nullopt)
     {
         // tile_config_pair corresponds to pair (tileN, config)
         auto [tileN, config] = std::tie(tile_config_pair[0], tile_config_pair[1]);
@@ -650,7 +711,8 @@ public:
             gemm2_weights_scale, gemm2_bias, output1_scale_scalar, output1_scale_gate_scalar, output2_scale_scalar,
             num_experts, top_k, n_group, topk_group, intermediate_size, valid_hidden_size, valid_intermediate_size,
             local_expert_offset, local_num_experts, routed_scaling_factor, tileN, routing_method_type, mDtypeAct,
-            *mRunners[tileN], config, topk_weights, topk_ids, output);
+            *mRunners[tileN], config, topk_weights, topk_ids, output, activation_input_scale, activation_output_scale,
+            finalize_input_scale);
     }
 
     /**
@@ -678,8 +740,11 @@ public:
         int64_t num_experts, int64_t top_k, std::optional<int64_t> const n_group,
         std::optional<int64_t> const topk_group, std::optional<int64_t> const output_hidden_size,
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
-        std::vector<int64_t> tile_config_pair) const
+        std::vector<int64_t> tile_config_pair, bool use_activation_scale = false) const
     {
+        TORCH_CHECK(!use_activation_scale || mDtypeAct != btg::Dtype::MxE4m3,
+            "activation_input_scale and activation_output_scale are not supported for MxE4m3 activations.");
+
         int64_t actual_output_hidden_size = output_hidden_size.value_or(hidden_size);
 
         // tile_config_pair corresponds to pair (tileN, config)
@@ -718,6 +783,7 @@ public:
         args.local_num_experts = local_num_experts;
         args.routed_scaling_factor = routed_scaling_factor.value_or(1.0);
         args.intermediate_size = intermediate_size;
+        args.activation_input_scale = use_activation_scale ? reinterpret_cast<float*>(1) : nullptr;
 
         // Get workspace sizes from the selected runner
         auto workspace_sizes = mRunners.at(tileN)->getWorkspaceSizeInBytes(args, config);
@@ -766,8 +832,9 @@ public:
         // gemm1_output: {max_num_padded_tokens, intermediate_size}
         // Type depends on dtype: BFloat16 (2 bytes) or Float8_e4m3fn (1 byte)
         size_t gemm1_output_element_size = (mDtypeAct == btg::Dtype::Bfloat16) ? sizeof(int16_t) : sizeof(int8_t);
+        int64_t const gemm1_output_dim = use_activation_scale ? 2 * intermediate_size : intermediate_size;
         size_t gemm1_output_size
-            = static_cast<size_t>(max_num_padded_tokens * intermediate_size) * gemm1_output_element_size;
+            = static_cast<size_t>(max_num_padded_tokens * gemm1_output_dim) * gemm1_output_element_size;
         total_size += align_size(gemm1_output_size);
 
         // gemm1_output_scale: {sf_size} UInt8 (only if dtype == MxE4m3)
@@ -775,9 +842,16 @@ public:
         {
             int32_t const sf_block_size = 32;
             int64_t sf_size
-                = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens, intermediate_size / sf_block_size);
+                = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens, gemm1_output_dim / sf_block_size);
             size_t gemm1_output_scale_size = static_cast<size_t>(sf_size) * sizeof(uint8_t);
             total_size += align_size(gemm1_output_scale_size);
+        }
+
+        if (use_activation_scale)
+        {
+            size_t activation_output_size
+                = static_cast<size_t>(max_num_padded_tokens * intermediate_size) * gemm1_output_element_size;
+            total_size += align_size(activation_output_size);
         }
 
         // gemm2_output: {max_num_padded_tokens, hidden_size} BFloat16
