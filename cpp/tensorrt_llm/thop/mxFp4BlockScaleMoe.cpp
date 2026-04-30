@@ -200,8 +200,6 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     args.finalize_input_scale = finalize_input_scale.has_value() ? finalize_input_scale.value().data_ptr<float>() : nullptr;
 
     bool const use_activation_scale = activation_input_scale.has_value() || activation_output_scale.has_value();
-    TORCH_CHECK(!use_activation_scale || dtype != btg::Dtype::MxE4m3,
-        "activation_input_scale and activation_output_scale are not supported for MxE4m3 activations.");
 
     // allocate workspace for routing kernel
     if (routing_logits.has_value() && topk_ids.has_value())
@@ -256,10 +254,17 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     }
 
     std::optional<at::Tensor> activation_output;
+    std::optional<at::Tensor> activation_output_scale_tensor;
     if (use_activation_scale)
     {
         activation_output = at::detail::empty_cuda(
             {max_num_padded_tokens_gemm1, intermediate_size}, gemm1_output_type, routing_device, std::nullopt);
+        if (dtype == btg::Dtype::MxE4m3)
+        {
+            int64_t sf_size = tensorrt_llm::computeSwizzledLayoutSFSize(
+                max_num_padded_tokens_gemm1, intermediate_size / sf_block_size);
+            activation_output_scale_tensor = at::detail::empty_cuda({sf_size}, SF_DTYPE, routing_device, std::nullopt);
+        }
     }
 
     at::Tensor gemm2_output = at::detail::empty_cuda(
@@ -515,7 +520,9 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     workspace.gemm1_output_scale
         = gemm1_output_scale.has_value() ? reinterpret_cast<float*>(gemm1_output_scale->data_ptr()) : nullptr;
     workspace.activation_output = activation_output.has_value() ? activation_output->data_ptr() : nullptr;
-    workspace.activation_output_scale = nullptr;
+    workspace.activation_output_scale = activation_output_scale_tensor.has_value()
+        ? reinterpret_cast<float*>(activation_output_scale_tensor->data_ptr())
+        : nullptr;
 
     // gemm2 intermediate ws
     workspace.gemm2_output = gemm2_output.data_ptr();
@@ -742,9 +749,6 @@ public:
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
         std::vector<int64_t> tile_config_pair, bool use_activation_scale = false) const
     {
-        TORCH_CHECK(!use_activation_scale || mDtypeAct != btg::Dtype::MxE4m3,
-            "activation_input_scale and activation_output_scale are not supported for MxE4m3 activations.");
-
         int64_t actual_output_hidden_size = output_hidden_size.value_or(hidden_size);
 
         // tile_config_pair corresponds to pair (tileN, config)
@@ -852,6 +856,14 @@ public:
             size_t activation_output_size
                 = static_cast<size_t>(max_num_padded_tokens * intermediate_size) * gemm1_output_element_size;
             total_size += align_size(activation_output_size);
+            if (mDtypeAct == btg::Dtype::MxE4m3)
+            {
+                int32_t const sf_block_size = 32;
+                int64_t sf_size
+                    = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens, intermediate_size / sf_block_size);
+                size_t activation_output_scale_size = static_cast<size_t>(sf_size) * sizeof(uint8_t);
+                total_size += align_size(activation_output_scale_size);
+            }
         }
 
         // gemm2_output: {max_num_padded_tokens, hidden_size} BFloat16

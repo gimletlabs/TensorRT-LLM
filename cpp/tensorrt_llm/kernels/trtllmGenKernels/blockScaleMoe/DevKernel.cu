@@ -19,6 +19,7 @@
 #include "cutlass/array.h"
 #include "cutlass/numeric_conversion.h"
 #include <cub/cub.cuh>
+#include <cuda_fp8.h>
 #include <cutlass/cutlass.h>
 #include <cutlass/numeric_types.h>
 
@@ -392,6 +393,110 @@ __global__ void activationDeepSeekKernel(KernelParams params)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+inline __device__ int32_t getMxFp8SfOffset(int32_t dataRowIdx, int32_t dataBlkColIdx, int32_t numDataBlksPerRow)
+{
+    static int32_t constexpr NumRowsPerSfBlock = 128;
+    static int32_t constexpr NumColsPerSfBlock = 4;
+    static int32_t constexpr NumBytesPerSfBlock = NumRowsPerSfBlock * NumColsPerSfBlock;
+
+    int const sfBlkRowIdx = dataRowIdx / NumRowsPerSfBlock;
+    int const sfBlkColIdx = dataBlkColIdx / NumColsPerSfBlock;
+    int const sfBlkIdx = sfBlkRowIdx * numDataBlksPerRow / NumColsPerSfBlock + sfBlkColIdx;
+
+    int const sfRowIdx = (dataRowIdx % 32) * 4 + (dataRowIdx % NumRowsPerSfBlock) / 32;
+    int const sfColIdx = dataBlkColIdx % NumColsPerSfBlock;
+
+    return sfBlkIdx * NumBytesPerSfBlock + sfRowIdx * NumColsPerSfBlock + sfColIdx;
+}
+
+inline __device__ float ue8m0ToFloat(uint8_t scale)
+{
+    return __uint_as_float(uint32_t{scale} << 23);
+}
+
+inline __device__ uint8_t floatToUe8m0(float value)
+{
+    __nv_fp8_e8m0 scale{};
+    scale.__x = __nv_cvt_float_to_e8m0(value, __NV_SATFINITE, cudaRoundPosInf);
+    return scale.__x;
+}
+
+template <typename KernelParams>
+__global__ void activationMxFp8Kernel(KernelParams params)
+{
+    using Type = typename KernelParams::Type;
+    static int32_t constexpr SfVecSize = 32;
+
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    if constexpr (KernelParams::UsePdl)
+    {
+        cudaTriggerProgrammaticLaunchCompletion();
+        cudaGridDependencySynchronize();
+    }
+#endif
+
+    int const outputDim = params.innerDim / 2;
+    int const inputNumSfPerRow = params.innerDim / SfVecSize;
+    int const outputNumSfPerRow = outputDim / SfVecSize;
+    int const hiddenIdx = blockIdx.x * SfVecSize + threadIdx.x;
+    int const k = blockIdx.y;
+
+    auto const* inputSfPtr = reinterpret_cast<uint8_t const*>(params.inDqSfsPtr);
+    auto* outputSfPtr = reinterpret_cast<uint8_t*>(params.outDqSfsPtr);
+
+    for (int tokenIdx = blockIdx.z; tokenIdx < params.numTokens; tokenIdx += gridDim.z)
+    {
+        int const expandedIdx = tokenIdx * params.topK + k;
+        int const permutedIdx = params.expandedIdxToPermutedIdx[expandedIdx];
+        if (permutedIdx == -1)
+        {
+            continue;
+        }
+
+        int const expertIdx = (params.inScalePtr || params.outScalePtr) ? getExpertIdx(params, expandedIdx) : 0;
+        int const in1Idx = permutedIdx * params.innerDim + hiddenIdx;
+        int const in2Idx = in1Idx + outputDim;
+        int const inScale1Idx = expertIdx * params.innerDim + hiddenIdx;
+        int const inScale2Idx = inScale1Idx + outputDim;
+        int const outScaleIdx = expertIdx * outputDim + hiddenIdx;
+
+        int const inputSf1Idx = getMxFp8SfOffset(permutedIdx, hiddenIdx / SfVecSize, inputNumSfPerRow);
+        int const inputSf2Idx = getMxFp8SfOffset(permutedIdx, (hiddenIdx + outputDim) / SfVecSize, inputNumSfPerRow);
+        float const inputSf1 = ue8m0ToFloat(inputSfPtr[inputSf1Idx]);
+        float const inputSf2 = ue8m0ToFloat(inputSfPtr[inputSf2Idx]);
+
+        float const inputScale1 = params.inScalePtr ? params.inScalePtr[inScale1Idx] : 1.0F;
+        float const inputScale2 = params.inScalePtr ? params.inScalePtr[inScale2Idx] : 1.0F;
+        float const outputScale = params.outScalePtr ? params.outScalePtr[outScaleIdx] : 1.0F;
+        float const x1 = inputScale1 * inputSf1 * static_cast<float>(params.inPtr[in1Idx]);
+        float const x2 = inputScale2 * inputSf2 * static_cast<float>(params.inPtr[in2Idx]);
+        float const out = outputScale * silu(x2) * x1;
+
+        float absOut = fabsf(out);
+#pragma unroll
+        for (int offset = SfVecSize / 2; offset > 0; offset /= 2)
+        {
+            absOut = fmaxf(absOut, __shfl_down_sync(0xFFFFFFFFU, absOut, offset));
+        }
+
+        uint8_t outputSf = 0;
+        if (threadIdx.x == 0)
+        {
+            float constexpr E4m3MaxVal{448.F};
+            outputSf = floatToUe8m0(absOut / E4m3MaxVal);
+            int const outputSfIdx = getMxFp8SfOffset(permutedIdx, hiddenIdx / SfVecSize, outputNumSfPerRow);
+            outputSfPtr[outputSfIdx] = outputSf;
+        }
+        outputSf = __shfl_sync(0xFFFFFFFFU, outputSf, 0);
+
+        float const quantScale = outputSf == 0 ? 0.0F : 1.0F / ue8m0ToFloat(outputSf);
+        int const outIdx = permutedIdx * outputDim + hiddenIdx;
+        params.outPtr[outIdx] = static_cast<Type>(out * quantScale);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void run(Data const& data, void* stream)
 {
     if (data.inScalePtr != nullptr || data.outScalePtr != nullptr)
@@ -405,6 +510,20 @@ void run(Data const& data, void* stream)
         // Note: this should be unreachable because the options are checked beforehand.
         // E2m1 requires using higher-precision intermediate data (bf16).
         TLLM_CHECK_WITH_INFO(false, "Activation with E2m1_t isn't supported.");
+        return;
+    }
+
+    if (data.mDtypeElt == tg::Dtype::MxE4m3)
+    {
+        TLLM_CHECK_WITH_INFO(!data.mUseDeepSeekFp8, "DeepSeek FP8 activation is not supported with MxE4m3.");
+        TLLM_CHECK_WITH_INFO(data.inDqSfsPtr != nullptr, "MxE4m3 activation requires input scale factors.");
+        TLLM_CHECK_WITH_INFO(data.outDqSfsPtr != nullptr, "MxE4m3 activation requires output scale factors.");
+        TLLM_CHECK_WITH_INFO(data.innerDim % 64 == 0, "MxE4m3 activation requires 32-element scale groups.");
+
+        int const numThreads = 32;
+        int const outputDim = data.innerDim / 2;
+        dim3 const grid(outputDim / 32, data.topK, std::min(8192, data.numTokens));
+        LAUNCH_PDL(data, false, cutlass::float_e4m3_t, activationMxFp8Kernel, grid, numThreads, 0, stream);
         return;
     }
 
