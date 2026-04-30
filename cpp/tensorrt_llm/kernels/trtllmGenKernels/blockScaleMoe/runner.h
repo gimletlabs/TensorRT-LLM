@@ -314,6 +314,9 @@ struct MoERunnerArgs
     // input: [num_experts, intermediate_size * 2], output: [num_experts, intermediate_size].
     float* activation_input_scale = nullptr;
     float* activation_output_scale = nullptr;
+    // Optional per-expert factors applied inside the finalize kernel.
+    // input: [num_experts, hidden_size].
+    float* finalize_input_scale = nullptr;
 
     // Output:
     void* output = nullptr;

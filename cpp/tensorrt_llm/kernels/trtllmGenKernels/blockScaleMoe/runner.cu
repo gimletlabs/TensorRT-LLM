@@ -524,6 +524,7 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
         finalizeData.outPtr = args.output;
         finalizeData.inDqSfsPtr = workspace.gemm2_output_scale;
         finalizeData.outDqSfsPtr = args.output_scale;
+        finalizeData.inScalePtr = args.finalize_input_scale;
         if (args.mUseRoutingScalesOnInput)
         {
             finalizeData.expertWeightsPtr = nullptr;
@@ -533,6 +534,7 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
             finalizeData.expertWeightsPtr = workspace.expert_weights;
         }
         finalizeData.expandedIdxToPermutedIdx = workspace.expanded_idx_to_permuted_idx;
+        finalizeData.expertIndexes = workspace.routing_expert_indexes;
         finalizeData.numTokens = args.num_tokens;
         finalizeData.numExperts = args.num_experts;
         finalizeData.topK = args.top_k;
@@ -674,6 +676,8 @@ void Runner::run(
     if (args.do_finalize)
     {
         // Run finalize
+        TLLM_CHECK_WITH_INFO(args.finalize_input_scale == nullptr || workspace.routing_expert_indexes != nullptr,
+            "Finalize input scale factors require routing expert indexes.");
         moe::dev::finalize::run(finalizeData, stream);
         sync_check_cuda_error(stream);
     }

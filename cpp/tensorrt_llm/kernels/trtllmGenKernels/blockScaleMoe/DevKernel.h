@@ -556,9 +556,11 @@ struct Data
     void* outPtr;
     float* inDqSfsPtr = nullptr;
     float* outDqSfsPtr = nullptr;
+    float const* inScalePtr = nullptr;
 
     void* expertWeightsPtr;
     int32_t* expandedIdxToPermutedIdx;
+    int32_t* expertIndexes = nullptr;
 
     int32_t numTokens;
     int32_t numExperts;
@@ -583,8 +585,10 @@ struct KernelParams
 
     float* inDqSfsPtr = nullptr;
     float* outDqSfsPtr = nullptr;
+    float const* inScalePtr = nullptr;
 
     int32_t* expandedIdxToPermutedIdx;
+    int32_t* expertIndexes = nullptr;
 
     int32_t hiddenDim;
     int32_t hiddenDimPadded;
@@ -603,8 +607,10 @@ struct KernelParams
         params.outPtr = (Type*) data.outPtr;
         params.inDqSfsPtr = data.inDqSfsPtr;
         params.outDqSfsPtr = data.outDqSfsPtr;
+        params.inScalePtr = data.inScalePtr;
 
         params.expandedIdxToPermutedIdx = data.expandedIdxToPermutedIdx;
+        params.expertIndexes = data.expertIndexes;
 
         params.hiddenDim = data.hiddenDim;
         params.hiddenDimPadded = data.hiddenDimPadded;
