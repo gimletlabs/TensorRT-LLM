@@ -179,7 +179,8 @@ class Runner
 {
 public:
     explicit Runner(batchedGemm::trtllm::gen::Dtype dtypeAct, batchedGemm::trtllm::gen::Dtype dtypeWeights,
-        bool useDeepSeekFp8, int tileTokensDim, ActType actType, bool forceNonFusedActivation = false);
+        batchedGemm::trtllm::gen::Dtype dtypeOut, bool useDeepSeekFp8, int tileTokensDim, ActType actType,
+        bool forceNonFusedActivation = false);
 
     size_t getWorkspaceSizeInBytes(int32_t topK, int32_t hiddenSize, int32_t intermediateSize, int32_t numExperts,
         int32_t numTokens, int32_t configIndex) const;
@@ -298,6 +299,7 @@ struct MoERunnerArgs
     int32_t local_num_experts{0};
     // TODO: support other types
     btg::Dtype mDtypeElt{btg::Dtype::Void};
+    btg::Dtype mDtypeGemm1Out{btg::Dtype::Void};
     btg::Dtype mDtypeExpW{btg::Dtype::Bfloat16};
     btg::Dtype mDtypeOut{btg::Dtype::Bfloat16};
     // Unpadded dimensions.
@@ -385,7 +387,8 @@ class Runner
 public:
     // FIXME: tileTokensDim is hardcoded for now
     Runner(batchedGemm::trtllm::gen::Dtype dtypeAct, batchedGemm::trtllm::gen::Dtype dtypeWeights, bool useDeepSeekFp8,
-        int tileTokensDim = 8, ActType actType = ActType::SwiGlu);
+        int tileTokensDim = 8, ActType actType = ActType::SwiGlu,
+        batchedGemm::trtllm::gen::Dtype dtypeGemm1Out = batchedGemm::trtllm::gen::Dtype::Void);
     Runner(batchedGemm::trtllm::gen::Dtype dtypeElt, bool useDeepSeekFp8, int tileTokensDim = 8);
 
     void run(
@@ -407,6 +410,8 @@ private:
         moe::dev::activation::Data& activationData, moe::dev::finalize::Data& finalizeData);
 
 private:
+    batchedGemm::trtllm::gen::Dtype mDtypeGemm1Out;
+    bool mUseStandaloneActivation;
     PermuteGemm1::Runner mPermuteGemm1;
     PermuteGemm1::Runner mPermuteGemm1NonFused;
     Gemm2::Runner mGemm2;

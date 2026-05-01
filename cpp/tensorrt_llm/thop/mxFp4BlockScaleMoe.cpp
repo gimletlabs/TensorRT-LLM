@@ -34,6 +34,15 @@ using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::RoutingMethodTy
 using MoeRunnerType = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::Runner;
 using tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::computeSelectedTileN;
 
+at::ScalarType scalarTypeFromDtype(btg::Dtype dtype)
+{
+    if (dtype == btg::Dtype::Bfloat16)
+    {
+        return at::ScalarType::BFloat16;
+    }
+    return at::ScalarType::Float8_e4m3fn;
+}
+
 torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor> const& routing_logits,
     torch::optional<torch::Tensor> const& routing_bias, torch::Tensor const& hidden_states,
     std::optional<torch::Tensor> const& hidden_states_scale, torch::Tensor const& gemm1_weights,
@@ -48,7 +57,7 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     std::optional<int64_t> const valid_hidden_size, std::optional<int64_t> const valid_intermediate_size,
     int64_t const local_expert_offset, int64_t const local_num_experts,
     std::optional<double> const routed_scaling_factor, int64_t const tile_tokens_dim, int64_t const routing_method_type,
-    btg::Dtype const dtype, MoeRunnerType& moe_runner, int64_t moeConfigIndex,
+    btg::Dtype const dtype, btg::Dtype const gemm1OutputDtype, MoeRunnerType& moe_runner, int64_t moeConfigIndex,
     torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
     torch::optional<torch::Tensor> const& out_tensor,
     torch::optional<torch::Tensor> const& activation_input_scale = torch::nullopt,
@@ -153,6 +162,7 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
 
     // setup args
     args.mDtypeElt = dtype;
+    args.mDtypeGemm1Out = gemm1OutputDtype;
     args.routing_logits = routing_logits.has_value() ? routing_logits.value().data_ptr() : nullptr;
     args.routing_bias = routing_bias.has_value() ? routing_bias.value().data_ptr() : nullptr;
     args.hidden_states = hidden_states.data_ptr();
@@ -200,6 +210,7 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     args.finalize_input_scale = finalize_input_scale.has_value() ? finalize_input_scale.value().data_ptr<float>() : nullptr;
 
     bool const use_activation_scale = activation_input_scale.has_value() || activation_output_scale.has_value();
+    bool const use_standalone_activation = use_activation_scale || args.mDtypeGemm1Out != args.mDtypeElt;
 
     // allocate workspace for routing kernel
     if (routing_logits.has_value() && topk_ids.has_value())
@@ -213,10 +224,10 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     int32_t max_num_padded_tokens
         = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxPermutedPaddedCount(
             args.num_tokens, top_k, num_experts, tile_tokens_dim);
-    int64_t const gemm1_output_size = use_activation_scale ? 2 * intermediate_size : intermediate_size;
+    int64_t const gemm1_output_size = use_standalone_activation ? 2 * intermediate_size : intermediate_size;
     int32_t max_num_padded_tokens_gemm1
         = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::maybeGetMinTokenCount(
-            max_num_padded_tokens, gemm1_output_size, btg::dtypeGetNumBits(args.mDtypeElt));
+            max_num_padded_tokens, gemm1_output_size, btg::dtypeGetNumBits(args.mDtypeGemm1Out));
     int32_t max_num_padded_tokens_gemm2
         = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::maybeGetMinTokenCount(
             max_num_padded_tokens, args.hidden_size, btg::dtypeGetNumBits(args.mDtypeOut));
@@ -240,13 +251,12 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
 
     int32_t const sf_block_size = 32;
     // allocate workspace for activation/gemm/finalize kernels
-    auto const gemm1_output_type
-        = dtype == btg::Dtype::Bfloat16 ? at::ScalarType::BFloat16 : at::ScalarType::Float8_e4m3fn;
+    auto const gemm1_output_type = scalarTypeFromDtype(args.mDtypeGemm1Out);
     at::Tensor gemm1_output = at::detail::empty_cuda(
         {max_num_padded_tokens_gemm1, gemm1_output_size}, gemm1_output_type, routing_device, std::nullopt);
 
     std::optional<at::Tensor> gemm1_output_scale;
-    if (dtype == btg::Dtype::MxE4m3)
+    if (args.mDtypeGemm1Out == btg::Dtype::MxE4m3)
     {
         int64_t sf_size
             = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens_gemm1, gemm1_output_size / sf_block_size);
@@ -255,11 +265,11 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
 
     std::optional<at::Tensor> activation_output;
     std::optional<at::Tensor> activation_output_scale_tensor;
-    if (use_activation_scale)
+    if (use_standalone_activation)
     {
         activation_output = at::detail::empty_cuda(
             {max_num_padded_tokens_gemm1, intermediate_size}, gemm1_output_type, routing_device, std::nullopt);
-        if (dtype == btg::Dtype::MxE4m3)
+        if (args.mDtypeGemm1Out == btg::Dtype::MxE4m3)
         {
             int64_t sf_size = tensorrt_llm::computeSwizzledLayoutSFSize(
                 max_num_padded_tokens_gemm1, intermediate_size / sf_block_size);
@@ -620,8 +630,8 @@ public:
             gemm1_weights, gemm1_weights_scale, gemm1_bias, gemm1_alpha, gemm1_beta, gemm1_clamp_limit, gemm2_weights,
             gemm2_weights_scale, gemm2_bias, std::nullopt, std::nullopt, std::nullopt, num_experts, top_k, n_group,
             topk_group, intermediate_size, valid_hidden_size, valid_intermediate_size, local_expert_offset,
-            local_num_experts, routed_scaling_factor, tileN, routing_method_type, mDtypeAct, *mRunners[tileN], config,
-            topk_weights, topk_ids, output);
+            local_num_experts, routed_scaling_factor, tileN, routing_method_type, mDtypeAct, mDtypeAct,
+            *mRunners[tileN], config, topk_weights, topk_ids, output);
     }
 
 private:
@@ -640,15 +650,21 @@ class MxE4m3MxE2m1BlockScaleMoeRunner : public torch::CustomClassHolder
 
 public:
     explicit MxE4m3MxE2m1BlockScaleMoeRunner(int64_t actType, bool isMxFp8)
+        : MxE4m3MxE2m1BlockScaleMoeRunner(actType, isMxFp8, false)
+    {
+    }
+
+    explicit MxE4m3MxE2m1BlockScaleMoeRunner(int64_t actType, bool isMxFp8, bool useBfloat16Gemm1Output)
         // Update this as new cubins come in
         : mSupportedTileN{isMxFp8 ? std::vector<int32_t>{8, 16, 32, 64, 128, 256} : std::vector<int32_t>{8, 16, 32, 64}}
         , mDtypeAct(isMxFp8 ? btg::Dtype::MxE4m3 : btg::Dtype::E4m3)
+        , mDtypeGemm1Out(useBfloat16Gemm1Output ? btg::Dtype::Bfloat16 : mDtypeAct)
     {
         for (int tileN : mSupportedTileN)
         {
             mRunners.emplace(tileN,
                 std::make_unique<RunnerType>(mDtypeAct, mDtypeWeights, mUseDeepSeekFp8, tileN,
-                    static_cast<tensorrt_llm::kernels::ActType>(actType)));
+                    static_cast<tensorrt_llm::kernels::ActType>(actType), mDtypeGemm1Out));
         }
     }
 
@@ -718,8 +734,8 @@ public:
             gemm2_weights_scale, gemm2_bias, output1_scale_scalar, output1_scale_gate_scalar, output2_scale_scalar,
             num_experts, top_k, n_group, topk_group, intermediate_size, valid_hidden_size, valid_intermediate_size,
             local_expert_offset, local_num_experts, routed_scaling_factor, tileN, routing_method_type, mDtypeAct,
-            *mRunners[tileN], config, topk_weights, topk_ids, output, activation_input_scale, activation_output_scale,
-            finalize_input_scale);
+            mDtypeGemm1Out, *mRunners[tileN], config, topk_weights, topk_ids, output, activation_input_scale,
+            activation_output_scale, finalize_input_scale);
     }
 
     /**
@@ -776,6 +792,7 @@ public:
         // Setup args for getWorkspaceSizeInBytes
         tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::MoE::MoERunnerArgs args;
         args.mDtypeElt = mDtypeAct;
+        args.mDtypeGemm1Out = mDtypeGemm1Out;
         args.num_tokens = num_tokens;
         args.num_experts = num_experts;
         args.hidden_size = hidden_size;
@@ -833,16 +850,18 @@ public:
         size_t expert_count_histogram_size = static_cast<size_t>(size_of_expert_count_histogram) * sizeof(int32_t);
         total_size += align_size(expert_count_histogram_size);
 
+        bool const use_standalone_activation = use_activation_scale || mDtypeGemm1Out != mDtypeAct;
+
         // gemm1_output: {max_num_padded_tokens, intermediate_size}
         // Type depends on dtype: BFloat16 (2 bytes) or Float8_e4m3fn (1 byte)
-        size_t gemm1_output_element_size = (mDtypeAct == btg::Dtype::Bfloat16) ? sizeof(int16_t) : sizeof(int8_t);
-        int64_t const gemm1_output_dim = use_activation_scale ? 2 * intermediate_size : intermediate_size;
+        size_t gemm1_output_element_size = (mDtypeGemm1Out == btg::Dtype::Bfloat16) ? sizeof(int16_t) : sizeof(int8_t);
+        int64_t const gemm1_output_dim = use_standalone_activation ? 2 * intermediate_size : intermediate_size;
         size_t gemm1_output_size
             = static_cast<size_t>(max_num_padded_tokens * gemm1_output_dim) * gemm1_output_element_size;
         total_size += align_size(gemm1_output_size);
 
         // gemm1_output_scale: {sf_size} UInt8 (only if dtype == MxE4m3)
-        if (mDtypeAct == btg::Dtype::MxE4m3)
+        if (mDtypeGemm1Out == btg::Dtype::MxE4m3)
         {
             int32_t const sf_block_size = 32;
             int64_t sf_size
@@ -851,12 +870,12 @@ public:
             total_size += align_size(gemm1_output_scale_size);
         }
 
-        if (use_activation_scale)
+        if (use_standalone_activation)
         {
             size_t activation_output_size
                 = static_cast<size_t>(max_num_padded_tokens * intermediate_size) * gemm1_output_element_size;
             total_size += align_size(activation_output_size);
-            if (mDtypeAct == btg::Dtype::MxE4m3)
+            if (mDtypeGemm1Out == btg::Dtype::MxE4m3)
             {
                 int32_t const sf_block_size = 32;
                 int64_t sf_size
@@ -896,6 +915,7 @@ private:
     std::unordered_map<int32_t, std::unique_ptr<RunnerType>> mRunners;
 
     btg::Dtype mDtypeAct{btg::Dtype::MxE4m3};
+    btg::Dtype mDtypeGemm1Out{btg::Dtype::MxE4m3};
     btg::Dtype mDtypeWeights{btg::Dtype::MxE2m1};
     bool mUseDeepSeekFp8{false};
 };
@@ -913,7 +933,7 @@ TORCH_LIBRARY_FRAGMENT(trtllm, m)
         .def("run_moe", &tensorrt_llm::torch_ext::Bf16MxE2m1BlockScaleMoeRunner::run);
 
     m.class_<tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner>("MxE4m3MxE2m1BlockScaleMoERunner")
-        .def(torch::init<int64_t, bool>())
+        .def(torch::init<int64_t, bool, bool>())
         .def("get_valid_configs", &tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::getValidConfigs)
         .def("get_workspace_size", &tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::get_workspace_size)
         .def("run_moe", &tensorrt_llm::torch_ext::MxE4m3MxE2m1BlockScaleMoeRunner::run);

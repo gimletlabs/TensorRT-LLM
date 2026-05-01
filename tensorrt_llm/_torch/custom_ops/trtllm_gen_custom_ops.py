@@ -876,7 +876,8 @@ class MxE4m3MxE2m1BlockScaleMoERunner(TunableRunner):
                  valid_hidden_size: int, valid_intermediate_size: int,
                  local_expert_offset: int, local_num_experts: int,
                  routed_scaling_factor: Optional[float],
-                 routing_method_type: int, act_type: int):
+                 routing_method_type: int, act_type: int,
+                 use_bfloat16_gemm1_output: bool = False):
 
         self.num_experts = num_experts
         self.top_k = top_k
@@ -890,6 +891,7 @@ class MxE4m3MxE2m1BlockScaleMoERunner(TunableRunner):
         self.routed_scaling_factor = routed_scaling_factor
         self.routing_method_type = routing_method_type
         self.act_type = act_type
+        self.use_bfloat16_gemm1_output = use_bfloat16_gemm1_output
 
         self.tuning_config = MxE4m3MxE2m1BlockScaleMoERunner.get_tuning_config(
             self.num_experts // self.local_num_experts)
@@ -905,14 +907,15 @@ class MxE4m3MxE2m1BlockScaleMoERunner(TunableRunner):
             self.valid_intermediate_size,
             self.local_num_experts,
             self.act_type,
+            self.use_bfloat16_gemm1_output,
         )
 
     def get_runner(self):
-        instance_key = (self.act_type, True)
+        instance_key = (self.act_type, True, self.use_bfloat16_gemm1_output)
         if instance_key not in MxE4m3MxE2m1BlockScaleMoERunner.runner_dict:
             MxE4m3MxE2m1BlockScaleMoERunner.runner_dict[
                 instance_key] = torch.classes.trtllm.MxE4m3MxE2m1BlockScaleMoERunner(
-                    self.act_type, True)
+                    self.act_type, True, self.use_bfloat16_gemm1_output)
         return MxE4m3MxE2m1BlockScaleMoERunner.runner_dict[instance_key]
 
     def forward(
@@ -1073,7 +1076,8 @@ def mxe4m3_mxe2m1_block_scale_moe_runner(
         act_type: int,
         topk_weights: Optional[torch.Tensor] = None,
         topk_ids: Optional[torch.Tensor] = None,
-        output: Optional[torch.Tensor] = None) -> torch.Tensor:
+        output: Optional[torch.Tensor] = None,
+        use_bfloat16_gemm1_output: bool = False) -> torch.Tensor:
 
     tuner = AutoTuner.get()
     kernel_runner = MxE4m3MxE2m1BlockScaleMoERunner(
@@ -1089,6 +1093,7 @@ def mxe4m3_mxe2m1_block_scale_moe_runner(
         routed_scaling_factor,
         routing_method_type,
         act_type,
+        use_bfloat16_gemm1_output,
     )
 
     # Prepare dummy topk tensors and hook for AutoTuner profiling
@@ -1218,7 +1223,7 @@ class E4m3MxE2m1BlockScaleMoERunner(TunableRunner):
         if instance_key not in E4m3MxE2m1BlockScaleMoERunner.runner_dict:
             E4m3MxE2m1BlockScaleMoERunner.runner_dict[
                 instance_key] = torch.classes.trtllm.MxE4m3MxE2m1BlockScaleMoERunner(
-                    self.act_type, False)
+                    self.act_type, False, False)
         return E4m3MxE2m1BlockScaleMoERunner.runner_dict[instance_key]
 
     def forward(

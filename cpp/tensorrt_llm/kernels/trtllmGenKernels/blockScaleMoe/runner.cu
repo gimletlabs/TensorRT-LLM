@@ -218,7 +218,7 @@ namespace PermuteGemm1
 {
 
 tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(btg::Dtype dtypeAct, btg::Dtype dtypeWeights,
-    int32_t tileTokensDim, bool useDeepSeekFp8, ActType actType, bool forceNonFusedActivation)
+    btg::Dtype dtypeOut, int32_t tileTokensDim, bool useDeepSeekFp8, ActType actType, bool forceNonFusedActivation)
 {
     bool is_gated_activation = actType == ActType::SwiGlu;
     tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions options;
@@ -229,7 +229,7 @@ tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(btg::Dtype d
         options = {// Swap A and B dtypes because transposeMmaOutput is hardcoded to true
             .dtypeA = dtypeWeights,
             .dtypeB = dtypeAct,
-            .dtypeC = dtypeAct,
+            .dtypeC = dtypeOut,
             .actType = actType,
             .deepSeekFp8 = useDeepSeekFp8,
             .fusedAct = !(useDeepSeekFp8 || forceNonFusedActivation),
@@ -251,7 +251,7 @@ tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(btg::Dtype d
         options = {
             .dtypeA = dtypeWeights,
             .dtypeB = dtypeAct,
-            .dtypeC = dtypeAct,
+            .dtypeC = dtypeOut,
             .eltwiseActType = eltwiseActType,
             .deepSeekFp8 = useDeepSeekFp8,
             .fusedAct = false,
@@ -265,13 +265,14 @@ tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(btg::Dtype d
     return options;
 }
 
-Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int tileTokensDim, ActType actType,
-    bool forceNonFusedActivation)
+Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, btg::Dtype dtypeOut, bool useDeepSeekFp8,
+    int tileTokensDim, ActType actType, bool forceNonFusedActivation)
     : mDtypeAct(dtypeAct)
     , mDtypeWeights(dtypeWeights)
     , mTileTokensDim(tileTokensDim)
     , mRunner(tensorrt_llm::kernels::TrtllmGenBatchedGemmRunner(
-          getOptions(mDtypeAct, mDtypeWeights, mTileTokensDim, useDeepSeekFp8, actType, forceNonFusedActivation)))
+          getOptions(mDtypeAct, mDtypeWeights, dtypeOut, mTileTokensDim, useDeepSeekFp8, actType,
+              forceNonFusedActivation)))
     , mActType(actType)
 {
 }
@@ -446,21 +447,30 @@ namespace MoE
 {
 namespace
 {
+btg::Dtype resolveDtype(btg::Dtype dtype, btg::Dtype defaultDtype)
+{
+    return dtype == btg::Dtype::Void ? defaultDtype : dtype;
+}
+
 bool hasActivationScale(MoERunnerArgs const& args)
 {
     return args.activation_input_scale != nullptr || args.activation_output_scale != nullptr;
 }
 } // namespace
 
-Runner::Runner(
-    btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int32_t tileTokensDim, ActType actType)
-    : mPermuteGemm1(PermuteGemm1::Runner(dtypeAct, dtypeWeights, useDeepSeekFp8, tileTokensDim, actType))
+Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int32_t tileTokensDim,
+    ActType actType, btg::Dtype dtypeGemm1Out)
+    : mDtypeGemm1Out(resolveDtype(dtypeGemm1Out, dtypeAct))
+    , mUseStandaloneActivation(mDtypeGemm1Out != dtypeAct)
+    , mPermuteGemm1(PermuteGemm1::Runner(
+          dtypeAct, dtypeWeights, mDtypeGemm1Out, useDeepSeekFp8, tileTokensDim, actType, mUseStandaloneActivation))
     , mPermuteGemm1NonFused(
-          PermuteGemm1::Runner(dtypeAct, dtypeWeights, useDeepSeekFp8, tileTokensDim, actType, true))
-    , mGemm2(Gemm2::Runner(dtypeAct, dtypeWeights, btg::Dtype::Bfloat16, useDeepSeekFp8, tileTokensDim))
+          PermuteGemm1::Runner(dtypeAct, dtypeWeights, mDtypeGemm1Out, useDeepSeekFp8, tileTokensDim, actType, true))
+    , mGemm2(Gemm2::Runner(mDtypeGemm1Out, dtypeWeights, btg::Dtype::Bfloat16, useDeepSeekFp8, tileTokensDim))
     , mActType(actType)
 {
-    auto const& gemm1PassingIndices = mPermuteGemm1.getPassingConfigIndices();
+    auto const& gemm1PassingIndices
+        = (mUseStandaloneActivation ? mPermuteGemm1NonFused : mPermuteGemm1).getPassingConfigIndices();
     auto const& gemm2PassingIndices = mGemm2.getPassingConfigIndices();
 
     auto const totalPassingIndices = gemm1PassingIndices.size() * gemm2PassingIndices.size();
@@ -496,7 +506,7 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
     convertSfData.mUsePdl = true;
 
     // Setup activation data
-    activationData.mDtypeElt = args.mDtypeElt;
+    activationData.mDtypeElt = resolveDtype(args.mDtypeGemm1Out, mDtypeGemm1Out);
     activationData.mUsePdl = true;
     activationData.mUseDeepSeekFp8 = args.mUseDeepSeekFp8;
     activationData.inPtr = workspace.gemm1_output;
@@ -548,9 +558,10 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
 std::tuple<int32_t, int32_t> Runner::getWorkspaceSizeInBytes(MoERunnerArgs const& args, int64_t configIndex) const
 {
     auto const& config = mPassingConfigs[configIndex];
-    auto const& gemm1Runner = hasActivationScale(args) ? mPermuteGemm1NonFused : mPermuteGemm1;
+    bool const useStandaloneActivation = mUseStandaloneActivation || hasActivationScale(args) || args.mUseDeepSeekFp8;
+    auto const& gemm1Runner = useStandaloneActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
     int32_t gemm1Config = config.gemm1Config;
-    if (hasActivationScale(args))
+    if (useStandaloneActivation && !mUseStandaloneActivation)
     {
         gemm1Config = mPermuteGemm1NonFused.getDefaultValidConfigIndex(args.top_k, args.hidden_size,
             args.intermediate_size, args.local_num_experts, args.num_tokens,
@@ -574,7 +585,8 @@ std::vector<int64_t> Runner::getValidConfigIndices(int32_t topK, int32_t hiddenS
     {
         auto const& config = mPassingConfigs[i];
 
-        if (mPermuteGemm1.isValidConfigIndex(config.gemm1Config, topK, hiddenSize, intermediateSize, numLocalExperts,
+        auto const& gemm1Runner = mUseStandaloneActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
+        if (gemm1Runner.isValidConfigIndex(config.gemm1Config, topK, hiddenSize, intermediateSize, numLocalExperts,
                 numTokens, validHiddenSize, validIntermediateSize)
             && mGemm2.isValidConfigIndex(config.gemm2Config, topK, hiddenSize, intermediateSize, numLocalExperts,
                 numTokens, validHiddenSize, validIntermediateSize))
@@ -583,7 +595,7 @@ std::vector<int64_t> Runner::getValidConfigIndices(int32_t topK, int32_t hiddenS
             auto envVarVal = std::getenv("TLLM_BATCHED_GEMM_PRINT_CONFIGS");
             if (envVarVal && std::atoi(envVarVal) == 1)
             {
-                auto kernel1 = mPermuteGemm1.getKernelNameFromConfigIndex(config.gemm1Config);
+                auto kernel1 = gemm1Runner.getKernelNameFromConfigIndex(config.gemm1Config);
                 auto kernel2 = mGemm2.getKernelNameFromConfigIndex(config.gemm2Config);
                 printf("Valid config index: %d, Gemm1 %s, Gemm2 %s\n", i, kernel1.c_str(), kernel2.c_str());
             }
@@ -597,7 +609,8 @@ int64_t Runner::getDefaultValidConfigIndex(int32_t topK, int32_t hiddenSize, int
     int32_t numLocalExperts, int32_t numTokens, int32_t validHiddenSize, int32_t validIntermediateSize) const
 {
 
-    int32_t indexGemm1 = mPermuteGemm1.getDefaultValidConfigIndex(
+    auto const& gemm1Runner = mUseStandaloneActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
+    int32_t indexGemm1 = gemm1Runner.getDefaultValidConfigIndex(
         topK, hiddenSize, intermediateSize, numLocalExperts, numTokens, validHiddenSize, validIntermediateSize);
     int32_t indexGemm2 = mGemm2.getDefaultValidConfigIndex(
         topK, hiddenSize, intermediateSize, numLocalExperts, numTokens, validHiddenSize, validIntermediateSize);
@@ -622,33 +635,35 @@ void Runner::run(
     void* hidden_states_scale_linear{args.hidden_states_scale};
 
     auto const& config = mPassingConfigs[configIndex];
-    bool const useNonFusedActivation = hasActivationScale(args);
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || mActType == ActType::SwiGlu,
-        "Activation input/output scale factors are only supported for SwiGLU.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || args.mDtypeElt != btg::Dtype::E2m1,
-        "Activation input/output scale factors are not supported for E2m1 activations.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.activation_output != nullptr,
-        "Activation input/output scale factors require activation output workspace.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || workspace.routing_expert_indexes != nullptr,
+    bool const useActivationScale = hasActivationScale(args);
+    bool const useStandaloneActivation = mUseStandaloneActivation || useActivationScale || args.mUseDeepSeekFp8;
+    auto const activationDtype = resolveDtype(args.mDtypeGemm1Out, mDtypeGemm1Out);
+    TLLM_CHECK_WITH_INFO(!useStandaloneActivation || mActType == ActType::SwiGlu,
+        "Standalone activation is only supported for SwiGLU.");
+    TLLM_CHECK_WITH_INFO(!useStandaloneActivation || activationDtype != btg::Dtype::E2m1,
+        "Standalone activation is not supported for E2m1 activations.");
+    TLLM_CHECK_WITH_INFO(!useStandaloneActivation || workspace.activation_output != nullptr,
+        "Standalone activation requires activation output workspace.");
+    TLLM_CHECK_WITH_INFO(!useActivationScale || workspace.routing_expert_indexes != nullptr,
         "Activation input/output scale factors require routing expert indexes.");
-    TLLM_CHECK_WITH_INFO(!args.mUseDeepSeekFp8 || args.mDtypeElt == btg::Dtype::E4m3,
+    TLLM_CHECK_WITH_INFO(!args.mUseDeepSeekFp8 || activationDtype == btg::Dtype::E4m3,
         "DeepSeek FP8 standalone activation is only supported for E4m3 activations.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || args.mDtypeElt == btg::Dtype::E4m3
-            || args.mDtypeElt == btg::Dtype::MxE4m3,
-        "Activation input/output scale factors are only supported for E4m3 and MxE4m3 activations.");
+    TLLM_CHECK_WITH_INFO(!useActivationScale || activationDtype == btg::Dtype::E4m3
+            || activationDtype == btg::Dtype::MxE4m3 || activationDtype == btg::Dtype::Bfloat16,
+        "Activation input/output scale factors are only supported for E4m3, MxE4m3, and Bfloat16 activations.");
     TLLM_CHECK_WITH_INFO(
         !args.mUseDeepSeekFp8 || workspace.gemm1_output_scale != nullptr, "DeepSeek FP8 requires GEMM1 output scales.");
     TLLM_CHECK_WITH_INFO(!args.mUseDeepSeekFp8 || workspace.activation_output_scale != nullptr,
         "DeepSeek FP8 requires activation output scales.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || args.mDtypeElt != btg::Dtype::MxE4m3
+    TLLM_CHECK_WITH_INFO(!useActivationScale || activationDtype != btg::Dtype::MxE4m3
             || workspace.gemm1_output_scale != nullptr,
         "MxE4m3 activation input/output scale factors require GEMM1 output scales.");
-    TLLM_CHECK_WITH_INFO(!useNonFusedActivation || args.mDtypeElt != btg::Dtype::MxE4m3
+    TLLM_CHECK_WITH_INFO(!useActivationScale || activationDtype != btg::Dtype::MxE4m3
             || workspace.activation_output_scale != nullptr,
         "MxE4m3 activation input/output scale factors require activation output scales.");
-    auto const& gemm1Runner = useNonFusedActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
+    auto& gemm1Runner = useStandaloneActivation ? mPermuteGemm1NonFused : mPermuteGemm1;
     int32_t gemm1Config = config.gemm1Config;
-    if (useNonFusedActivation)
+    if (useStandaloneActivation && !mUseStandaloneActivation)
     {
         gemm1Config = mPermuteGemm1NonFused.getDefaultValidConfigIndex(args.top_k, args.hidden_size,
             args.intermediate_size, args.local_num_experts, args.num_tokens,
@@ -665,11 +680,10 @@ void Runner::run(
         args.mUseRoutingScalesOnInput, device, stream, gemm1Config, args.valid_hidden_size.value_or(args.hidden_size),
         args.valid_intermediate_size.value_or(args.intermediate_size));
 
-    // DeepSeek FP8 and per-expert activation scales require a standalone activation after FC1.
+    // Some dtype combinations require a standalone activation after FC1.
     void* gemm2_input = workspace.gemm1_output;
     void* gemm2_input_scale = workspace.gemm1_output_scale;
-    if ((args.mDtypeElt == btg::Dtype::E4m3 || args.mDtypeElt == btg::Dtype::MxE4m3)
-        && (args.mUseDeepSeekFp8 || useNonFusedActivation))
+    if (useStandaloneActivation)
     {
         // Run activation
         moe::dev::activation::run(activationData, stream);

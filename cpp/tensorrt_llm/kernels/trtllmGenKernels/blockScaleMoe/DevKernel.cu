@@ -523,7 +523,7 @@ void run(Data const& data, void* stream)
         int const numThreads = 32;
         int const outputDim = data.innerDim / 2;
         dim3 const grid(outputDim / 32, data.topK, std::min(8192, data.numTokens));
-        LAUNCH_PDL(data, false, cutlass::float_e4m3_t, activationMxFp8Kernel, grid, numThreads, 0, stream);
+        LAUNCH_NUM_TOKENS_PER_CTA(data, cutlass::float_e4m3_t, 1, activationMxFp8Kernel, grid, numThreads, 0, stream);
         return;
     }
 
