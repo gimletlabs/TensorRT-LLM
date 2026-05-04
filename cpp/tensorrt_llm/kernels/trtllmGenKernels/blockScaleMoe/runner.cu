@@ -627,8 +627,31 @@ int64_t Runner::getDefaultValidConfigIndex(int32_t topK, int32_t hiddenSize, int
 namespace
 {
 
+// Decode a 4-bit E2m1 nibble (s ee m, exponent bias = 1) to float.
+// Packing convention: lo nibble (bits 3:0) = even-indexed element,
+//                     hi nibble (bits 7:4) = odd-indexed element.
+inline float e2m1NibbleToFloat(uint8_t nibble)
+{
+    uint8_t const s = (nibble >> 3) & 0x1u;
+    uint8_t const e = (nibble >> 1) & 0x3u;
+    uint8_t const m = nibble & 0x1u;
+    float val;
+    if (e == 0)
+    {
+        // subnormal: (-1)^s * 2^(1-bias) * (m / 2)  where bias=1  ->  (-1)^s * 0.5 * m
+        val = 0.5f * static_cast<float>(m);
+    }
+    else
+    {
+        // normal: (-1)^s * 2^(e-bias) * (1 + m * 0.5)  where bias=1
+        val = std::ldexp(1.0f + 0.5f * static_cast<float>(m), static_cast<int>(e) - 1);
+    }
+    return s ? -val : val;
+}
+
 // Print the first `count` elements of a device buffer, converting to float for display.
-// Supported dtypes: E4m3, Bfloat16, Fp16, Fp32.  Falls back to raw uint8 hex for others.
+// Supported dtypes: E2m1, MxE2m1, E4m3, MxE4m3, E5m2, Bfloat16, Fp16, Fp32.
+// Falls back to raw uint8 for other types.
 void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dtype dtype, cudaStream_t stream)
 {
     if (!devPtr)
@@ -636,32 +659,56 @@ void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dt
         printf("[MoE DBG] %s: nullptr\n", label);
         return;
     }
-    int bytesPerElem = 1;
-    switch (dtype)
+
+    // For 4-bit packed types, 2 elements share 1 byte.
+    bool const isFp4 = (dtype == btg::Dtype::E2m1 || dtype == btg::Dtype::MxE2m1);
+    size_t bytes;
+    if (isFp4)
     {
-    case btg::Dtype::E4m3:
-    case btg::Dtype::E5m2:
-    case btg::Dtype::Int8:
-    case btg::Dtype::UInt8: bytesPerElem = 1; break;
-    case btg::Dtype::Bfloat16:
-    case btg::Dtype::Fp16: bytesPerElem = 2; break;
-    case btg::Dtype::Fp32:
-    case btg::Dtype::Int32: bytesPerElem = 4; break;
-    default: bytesPerElem = 1; break;
+        bytes = static_cast<size_t>((count + 1) / 2);
     }
-    size_t bytes = static_cast<size_t>(count) * bytesPerElem;
+    else
+    {
+        int bytesPerElem = 1;
+        switch (dtype)
+        {
+        case btg::Dtype::E4m3:
+        case btg::Dtype::MxE4m3:
+        case btg::Dtype::E5m2:
+        case btg::Dtype::Int8:
+        case btg::Dtype::UInt8: bytesPerElem = 1; break;
+        case btg::Dtype::Bfloat16:
+        case btg::Dtype::Fp16: bytesPerElem = 2; break;
+        case btg::Dtype::Fp32:
+        case btg::Dtype::Int32: bytesPerElem = 4; break;
+        default: bytesPerElem = 1; break;
+        }
+        bytes = static_cast<size_t>(count) * bytesPerElem;
+    }
+
     std::vector<uint8_t> host(bytes);
     cudaStreamSynchronize(stream);
     cudaMemcpy(host.data(), devPtr, bytes, cudaMemcpyDeviceToHost);
 
-    printf("[MoE DBG] %s (first %d elems):", label, count);
+    printf("[MoE DBG] %s (first %d elems, dtype=%s):", label, count, btg::dtypeToString(dtype).c_str());
     for (int i = 0; i < count; ++i)
     {
         float val = 0.f;
         switch (dtype)
         {
-        case btg::Dtype::E4m3:
+        case btg::Dtype::E2m1:
+        case btg::Dtype::MxE2m1:
         {
+            // Two elements packed per byte: even index → lo nibble, odd index → hi nibble.
+            uint8_t const byte = host[i / 2];
+            uint8_t const nibble = (i % 2 == 0) ? (byte & 0x0fu) : (byte >> 4);
+            val = e2m1NibbleToFloat(nibble);
+            break;
+        }
+        case btg::Dtype::E4m3:
+        case btg::Dtype::MxE4m3:
+        {
+            // MxE4m3 raw element bits are identical to E4m3; block-scale is a separate tensor.
             __nv_fp8_e4m3 fp8val;
             memcpy(&fp8val, host.data() + i, 1);
             val = static_cast<float>(fp8val);
