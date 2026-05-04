@@ -21,6 +21,8 @@
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/KernelRunner.h"
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/trtllmGen_bmm_export/trtllm/gen/DtypeDecl.h"
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/trtllmGen_bmm_export/trtllm/gen/SfLayoutDecl.h"
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <iostream>
 #include <tensorrt_llm/common/assert.h>
 #include <tensorrt_llm/common/envUtils.h>
@@ -622,6 +624,90 @@ int64_t Runner::getDefaultValidConfigIndex(int32_t topK, int32_t hiddenSize, int
     return std::distance(mPassingConfigs.begin(), it);
 }
 
+namespace
+{
+
+// Print the first `count` elements of a device buffer, converting to float for display.
+// Supported dtypes: E4m3, Bfloat16, Fp16, Fp32.  Falls back to raw uint8 hex for others.
+void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dtype dtype, cudaStream_t stream)
+{
+    if (!devPtr)
+    {
+        printf("[MoE DBG] %s: nullptr\n", label);
+        return;
+    }
+    int bytesPerElem = 1;
+    switch (dtype)
+    {
+    case btg::Dtype::E4m3:
+    case btg::Dtype::E5m2:
+    case btg::Dtype::Int8:
+    case btg::Dtype::UInt8: bytesPerElem = 1; break;
+    case btg::Dtype::Bfloat16:
+    case btg::Dtype::Fp16: bytesPerElem = 2; break;
+    case btg::Dtype::Fp32:
+    case btg::Dtype::Int32: bytesPerElem = 4; break;
+    default: bytesPerElem = 1; break;
+    }
+    size_t bytes = static_cast<size_t>(count) * bytesPerElem;
+    std::vector<uint8_t> host(bytes);
+    cudaStreamSynchronize(stream);
+    cudaMemcpy(host.data(), devPtr, bytes, cudaMemcpyDeviceToHost);
+
+    printf("[MoE DBG] %s (first %d elems):", label, count);
+    for (int i = 0; i < count; ++i)
+    {
+        float val = 0.f;
+        switch (dtype)
+        {
+        case btg::Dtype::E4m3:
+        {
+            __nv_fp8_e4m3 fp8val;
+            memcpy(&fp8val, host.data() + i, 1);
+            val = static_cast<float>(fp8val);
+            break;
+        }
+        case btg::Dtype::E5m2:
+        {
+            __nv_fp8_e5m2 fp8val;
+            memcpy(&fp8val, host.data() + i, 1);
+            val = static_cast<float>(fp8val);
+            break;
+        }
+        case btg::Dtype::Bfloat16:
+        {
+            __nv_bfloat16 bf16val;
+            memcpy(&bf16val, host.data() + i * 2, 2);
+            val = __bfloat162float(bf16val);
+            break;
+        }
+        case btg::Dtype::Fp16:
+        {
+            __half hval;
+            memcpy(&hval, host.data() + i * 2, 2);
+            val = __half2float(hval);
+            break;
+        }
+        case btg::Dtype::Fp32: memcpy(&val, host.data() + i * 4, 4); break;
+        default: val = static_cast<float>(host[i]); break;
+        }
+        printf(" %.4f", val);
+    }
+    printf("\n");
+}
+
+void printDeviceFloats(char const* label, float const* devPtr, int count, cudaStream_t stream)
+{
+    if (!devPtr)
+    {
+        printf("[MoE DBG] %s: nullptr\n", label);
+        return;
+    }
+    printDeviceTensor(label, devPtr, count, btg::Dtype::Fp32, stream);
+}
+
+} // namespace
+
 void Runner::run(
     MoERunnerArgs const& args, MoEWorkspace const& workspace, int device, cudaStream_t stream, int64_t configIndex)
 {
@@ -671,6 +757,15 @@ void Runner::run(
             args.valid_intermediate_size.value_or(args.intermediate_size));
     }
 
+    //bool const dbg = (std::getenv("TLLM_MOE_DBG_TENSORS") != nullptr);
+    const bool dbg = true;
+
+    if (dbg)
+    {
+        printDeviceTensor("hidden_states (input)", args.hidden_states, 16, args.mDtypeElt, stream);
+        printDeviceFloats("hidden_states_scale (input)", static_cast<float const*>(hidden_states_scale_linear), 16, stream);
+    }
+
     gemm1Runner.run(args.hidden_states, hidden_states_scale_linear, args.gemm1_weights, args.gemm1_weights_scale,
         workspace.expert_weights, args.output1_scales_scalar, args.output1_scales_gate_scalar, args.gemm1_bias,
         args.gemm1_alpha, args.gemm1_beta, args.gemm1_clamp_limit, workspace.gemm1_output, workspace.gemm1_output_scale,
@@ -679,6 +774,12 @@ void Runner::run(
         workspace.cta_idx_xy_to_batch_idx, workspace.cta_idx_xy_to_mn_limit, workspace.bmm1_workspace,
         args.mUseRoutingScalesOnInput, device, stream, gemm1Config, args.valid_hidden_size.value_or(args.hidden_size),
         args.valid_intermediate_size.value_or(args.intermediate_size));
+
+    if (dbg)
+    {
+        printDeviceTensor("gemm1_output (post-PermuteGemm1)", workspace.gemm1_output, 16, args.mDtypeElt, stream);
+        printDeviceFloats("gemm1_output_scale (post-PermuteGemm1)", workspace.gemm1_output_scale, 16, stream);
+    }
 
     // Some dtype combinations require a standalone activation after FC1.
     void* gemm2_input = workspace.gemm1_output;
@@ -689,6 +790,12 @@ void Runner::run(
         moe::dev::activation::run(activationData, stream);
         gemm2_input = workspace.activation_output;
         gemm2_input_scale = workspace.activation_output_scale;
+
+        if (dbg)
+        {
+            printDeviceTensor("activation_output (post-activation)", workspace.activation_output, 16, args.mDtypeElt, stream);
+            printDeviceFloats("activation_output_scale (post-activation)", workspace.activation_output_scale, 16, stream);
+        }
     }
 
     // Run gemm2
@@ -700,6 +807,12 @@ void Runner::run(
         config.gemm2Config, args.valid_hidden_size.value_or(args.hidden_size),
         args.valid_intermediate_size.value_or(args.intermediate_size));
 
+    if (dbg)
+    {
+        printDeviceTensor("gemm2_output (post-Gemm2)", workspace.gemm2_output, 16, args.mDtypeElt, stream);
+        printDeviceFloats("gemm2_output_scale (post-Gemm2)", workspace.gemm2_output_scale, 16, stream);
+    }
+
     // Run finalize
     if (args.do_finalize)
     {
@@ -708,6 +821,12 @@ void Runner::run(
             "Finalize input scale factors require routing expert indexes.");
         moe::dev::finalize::run(finalizeData, stream);
         sync_check_cuda_error(stream);
+
+        if (dbg)
+        {
+            printDeviceTensor("output (post-finalize)", args.output, 16, args.mDtypeOut, stream);
+            printDeviceFloats("output_scale (post-finalize)", args.output_scale, 16, stream);
+        }
     }
 }
 } // namespace MoE
