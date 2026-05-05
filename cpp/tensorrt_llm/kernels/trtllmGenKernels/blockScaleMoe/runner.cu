@@ -1004,9 +1004,10 @@ void Runner::run(
     if (dbg)
     {
         int32_t const gemm1OutputHiddenDim = args.intermediate_size * (mActType == ActType::SwiGlu ? 2 : 1);
+        auto const gemm1OutputDtype = activationData.mDtypeElt;
         DebugScaleInfo const gemm1OutputScaleInfo = getOutputDebugScaleInfo(
-            workspace.gemm1_output_scale, activationDtype, gemm1OutputHiddenDim, dbgTotalNumPaddedTokens);
-        printDeviceTensor("gemm1_output (post-PermuteGemm1)", workspace.gemm1_output, kDbgElemCount, activationDtype,
+            workspace.gemm1_output_scale, gemm1OutputDtype, gemm1OutputHiddenDim, dbgTotalNumPaddedTokens);
+        printDeviceTensor("gemm1_output (post-PermuteGemm1)", workspace.gemm1_output, kDbgElemCount, gemm1OutputDtype,
             stream, gemm1OutputScaleInfo);
     }
 
@@ -1022,10 +1023,11 @@ void Runner::run(
 
         if (dbg)
         {
+            auto const activationOutputDtype = activationData.mDtypeElt;
             DebugScaleInfo const activationOutputScaleInfo = getOutputDebugScaleInfo(
-                workspace.activation_output_scale, activationDtype, args.intermediate_size, dbgTotalNumPaddedTokens);
+                workspace.activation_output_scale, activationOutputDtype, args.intermediate_size, dbgTotalNumPaddedTokens);
             printDeviceTensor("activation_output (post-activation)", workspace.activation_output, kDbgElemCount,
-                activationDtype, stream, activationOutputScaleInfo);
+                activationOutputDtype, stream, activationOutputScaleInfo);
         }
     }
 
