@@ -21,11 +21,13 @@
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/KernelRunner.h"
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/trtllmGen_bmm_export/trtllm/gen/DtypeDecl.h"
 #include "tensorrt_llm/kernels/trtllmGenKernels/batchedGemm/trtllmGen_bmm_export/trtllm/gen/SfLayoutDecl.h"
+#include <algorithm>
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
 #include <iostream>
 #include <tensorrt_llm/common/assert.h>
 #include <tensorrt_llm/common/envUtils.h>
+#include <vector>
 
 TRTLLM_NAMESPACE_BEGIN
 
@@ -649,10 +651,116 @@ inline float e2m1NibbleToFloat(uint8_t nibble)
     return s ? -val : val;
 }
 
+constexpr int kFp4SfBlockSize = 16;
+constexpr int kMxSfBlockSize = 32;
+constexpr int kFp8SfBlockSize = 128;
+
+enum class DebugScaleType
+{
+    None,
+    E4m3Linear,
+    E4m3R128c4,
+    E8m0Linear,
+    E8m0R128c4,
+    Fp32ColumnMajor
+};
+
+struct DebugScaleInfo
+{
+    void const* ptr{nullptr};
+    DebugScaleType type{DebugScaleType::None};
+    int32_t hiddenDim{0};
+    int32_t blockSize{0};
+    int32_t rowStride{0};
+};
+
+DebugScaleInfo makeDebugScaleInfo(
+    void const* ptr, DebugScaleType type, int32_t hiddenDim, int32_t blockSize, int32_t rowStride = 0)
+{
+    if (ptr == nullptr || type == DebugScaleType::None)
+    {
+        return {};
+    }
+    return DebugScaleInfo{ptr, type, hiddenDim, blockSize, rowStride};
+}
+
+DebugScaleInfo getInputDebugScaleInfo(
+    void const* scalePtr, btg::Dtype dtype, bool useDeepSeekFp8, int32_t hiddenDim, int32_t numTokens)
+{
+    if (dtype == btg::Dtype::E2m1)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E4m3Linear, hiddenDim, kFp4SfBlockSize);
+    }
+    if (dtype == btg::Dtype::MxE2m1)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E8m0Linear, hiddenDim, kMxSfBlockSize);
+    }
+    if (dtype == btg::Dtype::MxE4m3)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E8m0Linear, hiddenDim, kMxSfBlockSize);
+    }
+    if (useDeepSeekFp8 && dtype == btg::Dtype::E4m3)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::Fp32ColumnMajor, hiddenDim, kFp8SfBlockSize, numTokens);
+    }
+    return {};
+}
+
+DebugScaleInfo getOutputDebugScaleInfo(void const* scalePtr, btg::Dtype dtype, int32_t hiddenDim, int32_t rowStride)
+{
+    if (dtype == btg::Dtype::E2m1)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E4m3R128c4, hiddenDim, kFp4SfBlockSize);
+    }
+    if (dtype == btg::Dtype::MxE2m1)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E8m0R128c4, hiddenDim, kMxSfBlockSize);
+    }
+    if (dtype == btg::Dtype::MxE4m3)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E8m0R128c4, hiddenDim, kMxSfBlockSize);
+    }
+    if (dtype == btg::Dtype::E4m3)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::Fp32ColumnMajor, hiddenDim, kFp8SfBlockSize, rowStride);
+    }
+    return {};
+}
+
+inline float e8m0ToFloat(uint8_t scale)
+{
+    return scale == 0 ? 0.0F : std::ldexp(1.0F, static_cast<int>(scale) - 127);
+}
+
+inline float e4m3ToFloat(uint8_t scale)
+{
+    __nv_fp8_e4m3 scaleVal;
+    memcpy(&scaleVal, &scale, 1);
+    return static_cast<float>(scaleVal);
+}
+
+// Host-side equivalent of convertsf::dev::getSfOffset for the R128c4 scale layout.
+inline int64_t getR128c4SfOffset(int32_t dataRowIdx, int32_t dataBlkColIdx, int32_t numDataBlksPerRow)
+{
+    constexpr int32_t kNumRowsPerSfBlock = 128;
+    constexpr int32_t kNumColsPerSfBlock = 4;
+    constexpr int32_t kNumBytesPerSfBlock = kNumRowsPerSfBlock * kNumColsPerSfBlock;
+
+    int const sfBlkRowIdx = dataRowIdx / kNumRowsPerSfBlock;
+    int const sfBlkColIdx = dataBlkColIdx / kNumColsPerSfBlock;
+    int const sfBlkIdx = sfBlkRowIdx * numDataBlksPerRow / kNumColsPerSfBlock + sfBlkColIdx;
+
+    int const sfRowIdx = (dataRowIdx % 32) * 4 + (dataRowIdx % kNumRowsPerSfBlock) / 32;
+    int const sfColIdx = dataBlkColIdx % kNumColsPerSfBlock;
+
+    return sfBlkIdx * kNumBytesPerSfBlock + sfRowIdx * kNumColsPerSfBlock + sfColIdx;
+}
+
 // Print the first `count` elements of a device buffer, converting to float for display.
 // Supported dtypes: E2m1, MxE2m1, E4m3, MxE4m3, E5m2, Bfloat16, Fp16, Fp32.
 // Falls back to raw uint8 for other types.
-void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dtype dtype, cudaStream_t stream)
+void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dtype dtype, cudaStream_t stream,
+    DebugScaleInfo scaleInfo = {})
 {
     if (!devPtr)
     {
@@ -690,7 +798,49 @@ void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dt
     cudaStreamSynchronize(stream);
     cudaMemcpy(host.data(), devPtr, bytes, cudaMemcpyDeviceToHost);
 
-    printf("[MoE DBG] %s (first %d elems, dtype=%s):", label, count, btg::dtypeToString(dtype).c_str());
+    bool const hasScale = scaleInfo.ptr != nullptr && scaleInfo.type != DebugScaleType::None;
+    std::vector<uint8_t> scaleHost;
+    if (hasScale)
+    {
+        TLLM_CHECK_WITH_INFO(scaleInfo.hiddenDim > 0, "Debug scale printing requires a positive hidden dimension.");
+        TLLM_CHECK_WITH_INFO(scaleInfo.blockSize > 0, "Debug scale printing requires a positive scale block size.");
+        TLLM_CHECK_WITH_INFO(scaleInfo.hiddenDim % scaleInfo.blockSize == 0,
+            "Debug scale printing requires hiddenDim to be divisible by the scale block size.");
+
+        int32_t const numSfPerRow = scaleInfo.hiddenDim / scaleInfo.blockSize;
+        int64_t maxSfOffset = 0;
+        for (int i = 0; i < count; ++i)
+        {
+            int32_t const dataRowIdx = i / scaleInfo.hiddenDim;
+            int32_t const dataBlkColIdx = (i % scaleInfo.hiddenDim) / scaleInfo.blockSize;
+            int64_t sfOffset = dataRowIdx * numSfPerRow + dataBlkColIdx;
+            if (scaleInfo.type == DebugScaleType::E4m3R128c4 || scaleInfo.type == DebugScaleType::E8m0R128c4)
+            {
+                sfOffset = getR128c4SfOffset(dataRowIdx, dataBlkColIdx, numSfPerRow);
+            }
+            else if (scaleInfo.type == DebugScaleType::Fp32ColumnMajor)
+            {
+                TLLM_CHECK_WITH_INFO(
+                    scaleInfo.rowStride > 0, "FP32 column-major scale printing requires a positive row stride.");
+                sfOffset = dataRowIdx + scaleInfo.rowStride * dataBlkColIdx;
+            }
+            maxSfOffset = std::max(maxSfOffset, sfOffset);
+        }
+
+        size_t const scaleElementSize
+            = scaleInfo.type == DebugScaleType::Fp32ColumnMajor ? sizeof(float) : sizeof(uint8_t);
+        scaleHost.resize((static_cast<size_t>(maxSfOffset) + 1) * scaleElementSize);
+        cudaMemcpy(scaleHost.data(), scaleInfo.ptr, scaleHost.size(), cudaMemcpyDeviceToHost);
+    }
+
+    if (hasScale)
+    {
+        printf("[MoE DBG] %s (first %d elems, dtype=%s, scaled):", label, count, btg::dtypeToString(dtype).c_str());
+    }
+    else
+    {
+        printf("[MoE DBG] %s (first %d elems, dtype=%s):", label, count, btg::dtypeToString(dtype).c_str());
+    }
     for (int i = 0; i < count; ++i)
     {
         float val = 0.f;
@@ -738,19 +888,39 @@ void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dt
         case btg::Dtype::Fp32: memcpy(&val, host.data() + i * 4, 4); break;
         default: val = static_cast<float>(host[i]); break;
         }
+        if (hasScale)
+        {
+            int32_t const numSfPerRow = scaleInfo.hiddenDim / scaleInfo.blockSize;
+            int32_t const dataRowIdx = i / scaleInfo.hiddenDim;
+            int32_t const dataBlkColIdx = (i % scaleInfo.hiddenDim) / scaleInfo.blockSize;
+            int64_t sfOffset = dataRowIdx * numSfPerRow + dataBlkColIdx;
+            if (scaleInfo.type == DebugScaleType::E4m3R128c4 || scaleInfo.type == DebugScaleType::E8m0R128c4)
+            {
+                sfOffset = getR128c4SfOffset(dataRowIdx, dataBlkColIdx, numSfPerRow);
+            }
+            else if (scaleInfo.type == DebugScaleType::Fp32ColumnMajor)
+            {
+                sfOffset = dataRowIdx + scaleInfo.rowStride * dataBlkColIdx;
+            }
+
+            if (scaleInfo.type == DebugScaleType::Fp32ColumnMajor)
+            {
+                float scale = 1.0F;
+                memcpy(&scale, scaleHost.data() + sfOffset * static_cast<int64_t>(sizeof(float)), sizeof(float));
+                val *= scale;
+            }
+            else if (scaleInfo.type == DebugScaleType::E4m3Linear || scaleInfo.type == DebugScaleType::E4m3R128c4)
+            {
+                val *= e4m3ToFloat(scaleHost[static_cast<size_t>(sfOffset)]);
+            }
+            else
+            {
+                val *= e8m0ToFloat(scaleHost[static_cast<size_t>(sfOffset)]);
+            }
+        }
         printf(" %.4f", val);
     }
     printf("\n");
-}
-
-void printDeviceFloats(char const* label, float const* devPtr, int count, cudaStream_t stream)
-{
-    if (!devPtr)
-    {
-        printf("[MoE DBG] %s: nullptr\n", label);
-        return;
-    }
-    printDeviceTensor(label, devPtr, count, btg::Dtype::Fp32, stream);
 }
 
 } // namespace
@@ -804,13 +974,22 @@ void Runner::run(
             args.valid_intermediate_size.value_or(args.intermediate_size));
     }
 
-    //bool const dbg = (std::getenv("TLLM_MOE_DBG_TENSORS") != nullptr);
+    // bool const dbg = (std::getenv("TLLM_MOE_DBG_TENSORS") != nullptr);
     const bool dbg = true;
+    constexpr int kDbgElemCount = 16;
+    int32_t dbgTotalNumPaddedTokens = workspace.total_max_padded_tokens;
+    if (dbg && workspace.total_num_padded_tokens != nullptr)
+    {
+        cudaMemcpyAsync(&dbgTotalNumPaddedTokens, workspace.total_num_padded_tokens, sizeof(int32_t),
+            cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+    }
 
     if (dbg)
     {
-        printDeviceTensor("hidden_states (input)", args.hidden_states, 16, args.mDtypeElt, stream);
-        printDeviceFloats("hidden_states_scale (input)", static_cast<float const*>(hidden_states_scale_linear), 16, stream);
+        printDeviceTensor("hidden_states (input)", args.hidden_states, kDbgElemCount, args.mDtypeElt, stream,
+            getInputDebugScaleInfo(
+                hidden_states_scale_linear, args.mDtypeElt, args.mUseDeepSeekFp8, args.hidden_size, args.num_tokens));
     }
 
     gemm1Runner.run(args.hidden_states, hidden_states_scale_linear, args.gemm1_weights, args.gemm1_weights_scale,
@@ -824,8 +1003,11 @@ void Runner::run(
 
     if (dbg)
     {
-        printDeviceTensor("gemm1_output (post-PermuteGemm1)", workspace.gemm1_output, 16, args.mDtypeElt, stream);
-        printDeviceFloats("gemm1_output_scale (post-PermuteGemm1)", workspace.gemm1_output_scale, 16, stream);
+        int32_t const gemm1OutputHiddenDim = args.intermediate_size * (mActType == ActType::SwiGlu ? 2 : 1);
+        DebugScaleInfo const gemm1OutputScaleInfo = getOutputDebugScaleInfo(
+            workspace.gemm1_output_scale, activationDtype, gemm1OutputHiddenDim, dbgTotalNumPaddedTokens);
+        printDeviceTensor("gemm1_output (post-PermuteGemm1)", workspace.gemm1_output, kDbgElemCount, activationDtype,
+            stream, gemm1OutputScaleInfo);
     }
 
     // Some dtype combinations require a standalone activation after FC1.
@@ -840,8 +1022,10 @@ void Runner::run(
 
         if (dbg)
         {
-            printDeviceTensor("activation_output (post-activation)", workspace.activation_output, 16, args.mDtypeElt, stream);
-            printDeviceFloats("activation_output_scale (post-activation)", workspace.activation_output_scale, 16, stream);
+            DebugScaleInfo const activationOutputScaleInfo = getOutputDebugScaleInfo(
+                workspace.activation_output_scale, activationDtype, args.intermediate_size, dbgTotalNumPaddedTokens);
+            printDeviceTensor("activation_output (post-activation)", workspace.activation_output, kDbgElemCount,
+                activationDtype, stream, activationOutputScaleInfo);
         }
     }
 
@@ -856,8 +1040,11 @@ void Runner::run(
 
     if (dbg)
     {
-        printDeviceTensor("gemm2_output (post-Gemm2)", workspace.gemm2_output, 16, args.mDtypeElt, stream);
-        printDeviceFloats("gemm2_output_scale (post-Gemm2)", workspace.gemm2_output_scale, 16, stream);
+        DebugScaleInfo const gemm2OutputScaleInfo
+            = getOutputDebugScaleInfo(workspace.gemm2_output_scale, btg::Dtype::Bfloat16,
+                args.output_hidden_size.value_or(args.hidden_size), dbgTotalNumPaddedTokens);
+        printDeviceTensor("gemm2_output (post-Gemm2)", workspace.gemm2_output, kDbgElemCount, btg::Dtype::Bfloat16,
+            stream, gemm2OutputScaleInfo);
     }
 
     // Run finalize
@@ -871,8 +1058,10 @@ void Runner::run(
 
         if (dbg)
         {
-            printDeviceTensor("output (post-finalize)", args.output, 16, args.mDtypeOut, stream);
-            printDeviceFloats("output_scale (post-finalize)", args.output_scale, 16, stream);
+            DebugScaleInfo const outputScaleInfo = getOutputDebugScaleInfo(args.output_scale, args.mDtypeOut,
+                args.output_hidden_size.value_or(args.hidden_size), args.num_tokens);
+            printDeviceTensor("output (post-finalize)", args.output, kDbgElemCount, args.mDtypeOut, stream,
+                outputScaleInfo);
         }
     }
 }
