@@ -411,6 +411,7 @@ private:
 
 private:
     batchedGemm::trtllm::gen::Dtype mDtypeGemm1Out;
+    batchedGemm::trtllm::gen::Dtype mDtypeWeights;
     bool mUseStandaloneActivation;
     PermuteGemm1::Runner mPermuteGemm1;
     PermuteGemm1::Runner mPermuteGemm1NonFused;

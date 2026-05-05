@@ -465,6 +465,7 @@ bool hasActivationScale(MoERunnerArgs const& args)
 Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8, int32_t tileTokensDim,
     ActType actType, btg::Dtype dtypeGemm1Out)
     : mDtypeGemm1Out(resolveDtype(dtypeGemm1Out, dtypeAct))
+    , mDtypeWeights(dtypeWeights)
     , mUseStandaloneActivation(mDtypeGemm1Out != dtypeAct)
     , mPermuteGemm1(PermuteGemm1::Runner(
           dtypeAct, dtypeWeights, mDtypeGemm1Out, useDeepSeekFp8, tileTokensDim, actType, mUseStandaloneActivation))
@@ -727,6 +728,23 @@ DebugScaleInfo getOutputDebugScaleInfo(void const* scalePtr, btg::Dtype dtype, i
     return {};
 }
 
+DebugScaleInfo getWeightDebugScaleInfo(void const* scalePtr, btg::Dtype dtype, bool useDeepSeekFp8, int32_t hiddenDim)
+{
+    if (dtype == btg::Dtype::E2m1 || dtype == btg::Dtype::MxE2m1)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E8m0Linear, hiddenDim, kMxSfBlockSize);
+    }
+    if (dtype == btg::Dtype::MxE4m3)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::E8m0Linear, hiddenDim, kMxSfBlockSize);
+    }
+    if (useDeepSeekFp8 && dtype == btg::Dtype::E4m3)
+    {
+        return makeDebugScaleInfo(scalePtr, DebugScaleType::Fp32ColumnMajor, hiddenDim, kFp8SfBlockSize, hiddenDim);
+    }
+    return {};
+}
+
 inline float e8m0ToFloat(uint8_t scale)
 {
     return scale == 0 ? 0.0F : std::ldexp(1.0F, static_cast<int>(scale) - 127);
@@ -765,6 +783,11 @@ void printDeviceTensor(char const* label, void const* devPtr, int count, btg::Dt
     if (!devPtr)
     {
         printf("[MoE DBG] %s: nullptr\n", label);
+        return;
+    }
+    if (count <= 0)
+    {
+        printf("[MoE DBG] %s (first 0 elems, dtype=%s):\n", label, btg::dtypeToString(dtype).c_str());
         return;
     }
 
@@ -987,9 +1010,55 @@ void Runner::run(
 
     if (dbg)
     {
-        printDeviceTensor("hidden_states (input)", args.hidden_states, kDbgElemCount, args.mDtypeElt, stream,
+        auto const getDbgCount = [&](int64_t elemCount)
+        { return static_cast<int>(std::min<int64_t>(kDbgElemCount, std::max<int64_t>(elemCount, 0))); };
+        int32_t const gemm1OutputHiddenDim = args.intermediate_size * (mActType == ActType::SwiGlu ? 2 : 1);
+        int32_t const maxNumCtasInBatchDim = Routing::getMaxNumCtasInBatchDim(
+            args.num_tokens, args.top_k, args.local_num_experts, workspace.ProjUpTileN);
+        int64_t const hiddenStatesScaleCount = args.mUseDeepSeekFp8
+            ? static_cast<int64_t>(args.hidden_size / kFp8SfBlockSize) * args.num_tokens
+            : static_cast<int64_t>(args.hidden_size / kMxSfBlockSize) * args.num_tokens;
+        int64_t const gemm1WeightsScaleCount = args.mUseDeepSeekFp8
+            ? static_cast<int64_t>(args.local_num_experts) * (gemm1OutputHiddenDim / kFp8SfBlockSize)
+                * (args.hidden_size / kFp8SfBlockSize)
+            : static_cast<int64_t>(args.local_num_experts) * gemm1OutputHiddenDim * (args.hidden_size / kMxSfBlockSize);
+
+        printDeviceTensor("hidden_states (input)", args.hidden_states,
+            getDbgCount(static_cast<int64_t>(args.num_tokens) * args.hidden_size), args.mDtypeElt, stream,
             getInputDebugScaleInfo(
                 hidden_states_scale_linear, args.mDtypeElt, args.mUseDeepSeekFp8, args.hidden_size, args.num_tokens));
+        printDeviceTensor("hidden_states_scale_linear (gemm1 input)", hidden_states_scale_linear,
+            getDbgCount(hiddenStatesScaleCount), args.mUseDeepSeekFp8 ? btg::Dtype::Fp32 : btg::Dtype::UInt8, stream);
+        printDeviceTensor("gemm1_weights (input)", args.gemm1_weights,
+            getDbgCount(static_cast<int64_t>(args.local_num_experts) * gemm1OutputHiddenDim * args.hidden_size),
+            mDtypeWeights, stream,
+            getWeightDebugScaleInfo(args.gemm1_weights_scale, mDtypeWeights, args.mUseDeepSeekFp8, args.hidden_size));
+        printDeviceTensor("gemm1_weights_scale (input)", args.gemm1_weights_scale, getDbgCount(gemm1WeightsScaleCount),
+            args.mUseDeepSeekFp8 ? btg::Dtype::Fp32 : btg::Dtype::UInt8, stream);
+        printDeviceTensor("expert_weights (gemm1 input)", workspace.expert_weights,
+            getDbgCount(static_cast<int64_t>(args.num_tokens) * args.top_k), args.mDtypeExpW, stream);
+        printDeviceTensor("output1_scales_scalar (gemm1 input)", args.output1_scales_scalar,
+            getDbgCount(args.local_num_experts), btg::Dtype::Fp32, stream);
+        printDeviceTensor("output1_scales_gate_scalar (gemm1 input)", args.output1_scales_gate_scalar,
+            getDbgCount(args.local_num_experts), btg::Dtype::Fp32, stream);
+        printDeviceTensor("gemm1_bias (input)", args.gemm1_bias,
+            getDbgCount(static_cast<int64_t>(args.local_num_experts) * gemm1OutputHiddenDim), btg::Dtype::Fp32, stream);
+        printDeviceTensor(
+            "gemm1_alpha (input)", args.gemm1_alpha, getDbgCount(args.local_num_experts), btg::Dtype::Fp32, stream);
+        printDeviceTensor(
+            "gemm1_beta (input)", args.gemm1_beta, getDbgCount(args.local_num_experts), btg::Dtype::Fp32, stream);
+        printDeviceTensor("gemm1_clamp_limit (input)", args.gemm1_clamp_limit, getDbgCount(args.local_num_experts),
+            btg::Dtype::Fp32, stream);
+        printDeviceTensor("permuted_idx_to_token_idx (gemm1 input)", workspace.permuted_idx_to_token_idx,
+            getDbgCount(dbgTotalNumPaddedTokens), btg::Dtype::Int32, stream);
+        printDeviceTensor("cta_idx_xy_to_batch_idx (gemm1 input)", workspace.cta_idx_xy_to_batch_idx,
+            getDbgCount(maxNumCtasInBatchDim), btg::Dtype::Int32, stream);
+        printDeviceTensor("cta_idx_xy_to_mn_limit (gemm1 input)", workspace.cta_idx_xy_to_mn_limit,
+            getDbgCount(2LL * maxNumCtasInBatchDim), btg::Dtype::Int32, stream);
+        printDeviceTensor(
+            "num_non_exiting_ctas (gemm1 input)", workspace.num_non_exiting_ctas, 1, btg::Dtype::Int32, stream);
+        printDeviceTensor(
+            "total_num_padded_tokens (gemm1 input)", workspace.total_num_padded_tokens, 1, btg::Dtype::Int32, stream);
     }
 
     gemm1Runner.run(args.hidden_states, hidden_states_scale_linear, args.gemm1_weights, args.gemm1_weights_scale,
