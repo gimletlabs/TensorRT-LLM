@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -510,6 +510,7 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
         finalizeData.outPtr = args.output;
         finalizeData.inDqSfsPtr = workspace.gemm2_output_scale;
         finalizeData.outDqSfsPtr = args.output_scale;
+        finalizeData.inScalePtr = args.finalize_input_scale;
         if (args.mUseRoutingScalesOnInput)
         {
             finalizeData.expertWeightsPtr = nullptr;
@@ -519,6 +520,8 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
             finalizeData.expertWeightsPtr = workspace.expert_weights;
         }
         finalizeData.expandedIdxToPermutedIdx = workspace.expanded_idx_to_permuted_idx;
+        finalizeData.expertIndexes = args.topk_ids != nullptr ? args.topk_ids : workspace.routing_expert_indexes;
+        finalizeData.expertIndexesArePacked = args.topk_ids == nullptr;
         finalizeData.numTokens = args.num_tokens;
         finalizeData.numExperts = args.num_experts;
         finalizeData.topK = args.top_k;
@@ -633,6 +636,8 @@ void Runner::run(
     if (args.do_finalize)
     {
         // Run finalize
+        TLLM_CHECK_WITH_INFO(args.finalize_input_scale == nullptr || workspace.routing_expert_indexes != nullptr,
+            "Finalize input scale factors require routing expert indexes.");
         moe::dev::finalize::run(finalizeData, stream);
         sync_check_cuda_error(stream);
     }

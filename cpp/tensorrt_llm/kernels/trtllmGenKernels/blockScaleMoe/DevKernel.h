@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -547,9 +547,12 @@ struct Data
     void* outPtr;
     float* inDqSfsPtr = nullptr;
     float* outDqSfsPtr = nullptr;
+    float const* inScalePtr = nullptr;
 
     void* expertWeightsPtr;
     int32_t* expandedIdxToPermutedIdx;
+    void const* expertIndexes = nullptr;
+    bool expertIndexesArePacked = false;
 
     int32_t numTokens;
     int32_t numExperts;
@@ -574,8 +577,11 @@ struct KernelParams
 
     float* inDqSfsPtr = nullptr;
     float* outDqSfsPtr = nullptr;
+    float const* inScalePtr = nullptr;
 
     int32_t* expandedIdxToPermutedIdx;
+    void const* expertIndexes = nullptr;
+    bool expertIndexesArePacked = false;
 
     int32_t hiddenDim;
     int32_t hiddenDimPadded;
@@ -594,8 +600,11 @@ struct KernelParams
         params.outPtr = (Type*) data.outPtr;
         params.inDqSfsPtr = data.inDqSfsPtr;
         params.outDqSfsPtr = data.outDqSfsPtr;
+        params.inScalePtr = data.inScalePtr;
 
         params.expandedIdxToPermutedIdx = data.expandedIdxToPermutedIdx;
+        params.expertIndexes = data.expertIndexes;
+        params.expertIndexesArePacked = data.expertIndexesArePacked;
 
         params.hiddenDim = data.hiddenDim;
         params.hiddenDimPadded = data.hiddenDimPadded;

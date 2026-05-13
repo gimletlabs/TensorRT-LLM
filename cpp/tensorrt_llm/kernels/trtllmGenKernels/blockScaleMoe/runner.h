@@ -311,6 +311,10 @@ struct MoERunnerArgs
     float* output1_scales_gate_scalar = nullptr;
     float* output2_scales_scalar = nullptr;
 
+    // Optional per-expert factors applied inside the finalize kernel.
+    // input: [num_experts, hidden_size].
+    float* finalize_input_scale = nullptr;
+
     // Output:
     void* output = nullptr;
     float* output_scale = nullptr;

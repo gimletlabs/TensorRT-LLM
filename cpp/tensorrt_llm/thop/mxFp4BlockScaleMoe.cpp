@@ -50,7 +50,7 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     std::optional<double> const routed_scaling_factor, int64_t const tile_tokens_dim, int64_t const routing_method_type,
     btg::Dtype const dtype, MoeRunnerType& moe_runner, int64_t moeConfigIndex,
     torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
-    torch::optional<torch::Tensor> const& out_tensor)
+    torch::optional<torch::Tensor> const& out_tensor, torch::optional<torch::Tensor> const& finalize_input_scale)
 {
     TORCH_CHECK(tensorrt_llm::common::isSM100Family(), "Only SM100f is supported by MXFP4 block scale MOE");
     TORCH_CHECK(tile_tokens_dim == 8 || tile_tokens_dim == 16 || tile_tokens_dim == 32 || tile_tokens_dim == 64
@@ -173,6 +173,8 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
         = output1_scale_gate_scalar.has_value() ? output1_scale_gate_scalar.value().data_ptr<float>() : nullptr;
     args.output2_scales_scalar
         = output2_scale_scalar.has_value() ? output2_scale_scalar.value().data_ptr<float>() : nullptr;
+    args.finalize_input_scale
+        = finalize_input_scale.has_value() ? finalize_input_scale.value().data_ptr<float>() : nullptr;
     args.num_tokens = hidden_states.sizes()[0];
     args.num_experts = num_experts;
     // Hidden dimension input of MoE block. It might be padded.
@@ -421,6 +423,19 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
             output2_scale_scalar->sizes()[0] == local_num_experts, "output2_scales_scalar has incorrect dim 0.");
     }
 
+    if (finalize_input_scale.has_value())
+    {
+        TORCH_CHECK(finalize_input_scale->scalar_type() == at::ScalarType::Float,
+            "finalize_input_scale must be float, got %s.", c10::toString(finalize_input_scale->scalar_type()));
+        TORCH_CHECK(finalize_input_scale->dim() == 2, "finalize_input_scale must be 2D.");
+        TORCH_CHECK(finalize_input_scale->sizes()[0] == num_experts, "finalize_input_scale has incorrect dim 0.");
+        TORCH_CHECK(finalize_input_scale->sizes()[1] == args.valid_hidden_size.value_or(args.hidden_size),
+            "finalize_input_scale has incorrect dim 1.");
+        TORCH_CHECK(finalize_input_scale->device() == hidden_states.device(),
+            "finalize_input_scale must be on the input device.");
+        TORCH_CHECK(finalize_input_scale->is_contiguous(), "finalize_input_scale must be contiguous.");
+    }
+
     // allocate or use provided output
     at::Tensor output;
     if (out_tensor.has_value())
@@ -531,7 +546,8 @@ public:
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
         int64_t routing_method_type, std::vector<int64_t> moeConfigIndex,
         torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
-        torch::optional<torch::Tensor> const& output = torch::nullopt)
+        torch::optional<torch::Tensor> const& output = torch::nullopt,
+        torch::optional<torch::Tensor> const& finalize_input_scale = torch::nullopt)
 
     {
         // moeConfigIndex corresponds to pair (tileN, config)
@@ -556,7 +572,7 @@ public:
             gemm2_weights_scale, gemm2_bias, std::nullopt, std::nullopt, std::nullopt, num_experts, top_k, n_group,
             topk_group, intermediate_size, valid_hidden_size, valid_intermediate_size, local_expert_offset,
             local_num_experts, routed_scaling_factor, tileN, routing_method_type, mDtypeAct, *mRunners[tileN], config,
-            topk_weights, topk_ids, output);
+            topk_weights, topk_ids, output, finalize_input_scale);
     }
 
 private:
@@ -626,7 +642,8 @@ public:
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
         int64_t routing_method_type, std::vector<int64_t> tile_config_pair,
         torch::optional<torch::Tensor> const& topk_weights, torch::optional<torch::Tensor> const& topk_ids,
-        torch::optional<torch::Tensor> const& output)
+        torch::optional<torch::Tensor> const& output,
+        torch::optional<torch::Tensor> const& finalize_input_scale = torch::nullopt)
     {
         // tile_config_pair corresponds to pair (tileN, config)
         auto [tileN, config] = std::tie(tile_config_pair[0], tile_config_pair[1]);
@@ -650,7 +667,7 @@ public:
             gemm2_weights_scale, gemm2_bias, output1_scale_scalar, output1_scale_gate_scalar, output2_scale_scalar,
             num_experts, top_k, n_group, topk_group, intermediate_size, valid_hidden_size, valid_intermediate_size,
             local_expert_offset, local_num_experts, routed_scaling_factor, tileN, routing_method_type, mDtypeAct,
-            *mRunners[tileN], config, topk_weights, topk_ids, output);
+            *mRunners[tileN], config, topk_weights, topk_ids, output, finalize_input_scale);
     }
 
     /**

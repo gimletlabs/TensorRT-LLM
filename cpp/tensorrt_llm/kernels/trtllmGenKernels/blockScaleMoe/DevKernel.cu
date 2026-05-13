@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "DevKernel.h"
+#include "RoutingKernel.h"
 
 #include "cutlass/array.h"
 #include "cutlass/numeric_conversion.h"
@@ -701,6 +702,22 @@ namespace tg = batchedGemm::trtllm::gen;
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
+__device__ __forceinline__ int32_t getExpertIdx(KernelParams const& params, int32_t expandedIdx)
+{
+    if (params.expertIndexesArePacked)
+    {
+        using TypeExpW = typename KernelParams::TypeExpW;
+        auto const* packedExpertIndexes
+            = static_cast<routing::PackedScoreIdx<TypeExpW> const*>(params.expertIndexes);
+        return static_cast<int32_t>(packedExpertIndexes[expandedIdx].idx);
+    }
+    auto const* expertIndexes = static_cast<int32_t const*>(params.expertIndexes);
+    return expertIndexes[expandedIdx];
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename KernelParams>
 __global__ void finalizeKernel(KernelParams params)
 {
     using Type = typename KernelParams::Type;
@@ -734,15 +751,19 @@ __global__ void finalizeKernel(KernelParams params)
                 {
                     continue;
                 }
+                int const expertIdx = params.inScalePtr ? getExpertIdx(params, expandedIdx) : 0;
+                int const inIdx = permutedIdx * params.hiddenDimPadded + hiddenIdx;
+                int const inScaleIdx = expertIdx * params.hiddenDim + hiddenIdx;
+                float const inputScale = params.inScalePtr ? params.inScalePtr[inScaleIdx] : 1.0f;
 
                 if (params.expertWeightsPtr != nullptr)
                 {
                     TypeExpW const scale = params.expertWeightsPtr[expandedIdx];
-                    data += float{scale} * float{params.inPtr[permutedIdx * params.hiddenDimPadded + hiddenIdx]};
+                    data += inputScale * float{scale} * float{params.inPtr[inIdx]};
                 }
                 else
                 {
-                    data += float{params.inPtr[permutedIdx * params.hiddenDimPadded + hiddenIdx]};
+                    data += inputScale * float{params.inPtr[inIdx]};
                 }
             }
 
@@ -814,6 +835,7 @@ __global__ void finalizeKernelVecLoad(KernelParams params)
             {
                 continue;
             }
+            int const expertIdx = params.inScalePtr ? getExpertIdx(params, expandedIdx) : 0;
 
             float const scale
                 = (params.expertWeightsPtr != nullptr) ? static_cast<float>(params.expertWeightsPtr[expandedIdx]) : 1.f;
@@ -823,6 +845,16 @@ __global__ void finalizeKernelVecLoad(KernelParams params)
             float4 input = vectorizedLoadPtx(reinterpret_cast<float4 const*>(&inputPermutedPtr[elemIndex]));
             InputElem inputPermutedElem = *reinterpret_cast<InputElem const*>(&input);
             ComputeElem expertResult = arrayConvert<InputElem, ComputeElem>(inputPermutedElem);
+            if (params.inScalePtr != nullptr)
+            {
+#pragma unroll
+                for (int idx = 0; idx < FINALIZE_ELEM_PER_THREAD; ++idx)
+                {
+                    int const hiddenIdx = elemIndex * FINALIZE_ELEM_PER_THREAD + idx;
+                    int const inScaleIdx = expertIdx * params.hiddenDim + hiddenIdx;
+                    expertResult[idx] *= params.inScalePtr[inScaleIdx];
+                }
+            }
 
             threadOutput = threadOutput + scale * expertResult;
         }
@@ -872,11 +904,15 @@ __global__ void finalizeDeepSeekKernel(KernelParams params)
                 int const totalNumPaddedTokens = params.totalNumPaddedTokens[0];
                 int const scaleIdx = permutedIdx + totalNumPaddedTokens * (hiddenIdx / 128);
                 float const blockScale = params.inDqSfsPtr ? params.inDqSfsPtr[scaleIdx] : 1;
+                int const expertIdx = params.inScalePtr ? getExpertIdx(params, expandedIdx) : 0;
+                int const inIdx = permutedIdx * params.hiddenDimPadded + hiddenIdx;
+                int const inScaleIdx = expertIdx * params.hiddenDim + hiddenIdx;
+                float const inputScale = params.inScalePtr ? params.inScalePtr[inScaleIdx] : 1.0f;
 
                 float const expertProb = (float) params.expertWeightsPtr[tokenIdx * params.topK + k];
 
-                float const scale = expertProb * blockScale;
-                acc += scale * static_cast<float>(params.inPtr[permutedIdx * params.hiddenDimPadded + hiddenIdx]);
+                float const scale = inputScale * expertProb * blockScale;
+                acc += scale * static_cast<float>(params.inPtr[inIdx]);
             }
 
             // The largest (finite) value that can be represented using E4m3.
@@ -909,6 +945,11 @@ __global__ void finalizeDeepSeekKernel(KernelParams params)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 void run(Data const& data, void* stream)
 {
+    if (data.inScalePtr != nullptr)
+    {
+        TLLM_CHECK_WITH_INFO(data.expertIndexes != nullptr, "Finalize input scales require expert indexes.");
+    }
+
     if (data.mUseDeepSeekFp8)
     {
         int const numThreads = 128;
