@@ -222,6 +222,8 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
         = at::detail::empty_cuda({args.num_tokens, args.top_k}, at::ScalarType::BFloat16, routing_device, std::nullopt);
     at::Tensor expert_indexes
         = at::detail::empty_cuda({args.num_tokens, args.top_k}, at::ScalarType::Int, routing_device, std::nullopt);
+    at::Tensor expanded_idx_to_expert_idx
+        = at::detail::empty_cuda({args.num_tokens, args.top_k}, at::ScalarType::Int, routing_device, std::nullopt);
 
     int64_t const size_of_expert_count_histogram = std::max(num_experts * 2, int64_t(256 * 2));
     at::Tensor expert_count_histogram
@@ -279,8 +281,9 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     routing_runner.run(args.routing_logits, args.routing_bias, args.num_tokens, args.num_experts, args.top_k,
         args.n_group, args.topk_group, args.local_expert_offset, args.local_num_experts, args.routed_scaling_factor,
         expert_indexes.data_ptr<int>(), expert_count_histogram.data_ptr<int>(), total_num_padded_tokens.data_ptr<int>(),
-        expanded_idx_to_permuted_idx.data_ptr<int>(), nullptr, /*permuted_idx_to_expanded_idx.data_ptr<int>(),*/
-        permuted_idx_to_token_idx.data_ptr<int>(), expert_weights_ptr, args.topk_ids,
+        expanded_idx_to_permuted_idx.data_ptr<int>(), expanded_idx_to_expert_idx.data_ptr<int>(), nullptr,
+        /*permuted_idx_to_expanded_idx.data_ptr<int>(),*/ permuted_idx_to_token_idx.data_ptr<int>(), expert_weights_ptr,
+        args.topk_ids,
         num_tokens_per_expert.data_ptr<int>(), cta_idx_xy_to_batch_idx.data_ptr<int>(),
         cta_idx_xy_to_mn_limit.data_ptr<int>(), num_non_exiting_ctas.data_ptr<int>(), args.mDtypeElt,
         false /* use_routing_scales_on_input */, false /* use_deep_seek_fp8 */,
@@ -462,6 +465,7 @@ torch::Tensor dtype_mxe2m1_block_scale_moe_runner(torch::optional<torch::Tensor>
     workspace.permuted_idx_size = total_num_padded_tokens.data_ptr<int>();
     workspace.expanded_idx_to_permuted_idx
         = expanded_idx_to_permuted_idx.data_ptr<int>(); // Needed by permute/finalize kernels
+    workspace.expanded_idx_to_expert_idx = expanded_idx_to_expert_idx.data_ptr<int>();
     workspace.permuted_idx_to_token_idx = permuted_idx_to_token_idx.data_ptr<int>(); // Needed by permuteGemm1 kernel
     workspace.expert_weights = expert_weights_ptr;                                   // Consumed by finalize kernel
 

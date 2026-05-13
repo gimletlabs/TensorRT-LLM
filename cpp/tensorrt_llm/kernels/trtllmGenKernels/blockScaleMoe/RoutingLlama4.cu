@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -347,6 +347,10 @@ __global__ void __launch_bounds__(WarpSize) routingIndicesWarpKernel(KernelParam
             if (params.mPtrExpandedIdxToPermutedIdx != nullptr && isTokenRouted)
             {
                 params.mPtrExpandedIdxToPermutedIdx[tokenIdx] = permutedIdx;
+            }
+            if (params.mPtrExpandedIdxToExpertIdx != nullptr && isTokenRouted)
+            {
+                params.mPtrExpandedIdxToExpertIdx[tokenIdx] = expertIdx;
             }
             // write out `mPtrPermutedIdxToExpandedIdx` if required
             if (params.mPtrPermutedIdxToExpandedIdx != nullptr && isLocalExpert)

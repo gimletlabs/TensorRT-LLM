@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,6 +53,9 @@ struct DataBase
     // optional: if `nullptr`, it is not filled
     // dim: [mNumTokens * mTopK]
     int32_t* mPtrExpandedIdxToPermutedIdx{nullptr};
+    // optional: if `nullptr`, it is not filled
+    // dim: [mNumTokens * mTopK]
+    int32_t* mPtrExpandedIdxToExpertIdx{nullptr};
     // optional: if `nullptr`, it is not filled
     // dim: [mTileTokensDim * mTopK + (mNumExperts × mTileTokensDim) - mNumExperts]
     int32_t* mPtrPermutedIdxToExpandedIdx{nullptr};
@@ -123,6 +126,7 @@ struct KernelParamsBase
     int32_t* mPtrExpertCounts = nullptr;
     int32_t* mPtrPermutedIdxSize = nullptr;
     int32_t* mPtrExpandedIdxToPermutedIdx = nullptr;
+    int32_t* mPtrExpandedIdxToExpertIdx = nullptr;
     int32_t* mPtrPermutedIdxToExpandedIdx = nullptr;
     int32_t* mPtrPermutedIdxToTokenIdx = nullptr;
     int32_t* mPtrCtaIdxXyToBatchIdx = nullptr;
@@ -149,6 +153,7 @@ struct KernelParamsBase
         mPtrExpertCounts = data.mPtrExpertCounts;
         mPtrPermutedIdxSize = data.mPtrPermutedIdxSize;
         mPtrExpandedIdxToPermutedIdx = data.mPtrExpandedIdxToPermutedIdx;
+        mPtrExpandedIdxToExpertIdx = data.mPtrExpandedIdxToExpertIdx;
         mPtrPermutedIdxToExpandedIdx = data.mPtrPermutedIdxToExpandedIdx;
         mPtrPermutedIdxToTokenIdx = data.mPtrPermutedIdxToTokenIdx;
         mPtrCtaIdxXyToBatchIdx = data.mPtrCtaIdxXyToBatchIdx;

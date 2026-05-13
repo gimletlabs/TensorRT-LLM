@@ -84,6 +84,10 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts <= 1024 ? KernelPa
                 else
                 {
                     params.mPtrExpandedIdxToPermutedIdx[warpIdx * params.mTopK + laneIdx] = int32_t{-1};
+                    if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+                    {
+                        params.mPtrExpandedIdxToExpertIdx[warpIdx * params.mTopK + laneIdx] = int32_t{-1};
+                    }
                 }
             }
         }
@@ -266,6 +270,10 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts <= 1024 ? KernelPa
                 {
                     params.mPtrExpandedIdxToPermutedIdx[expandedIdx] = permutedIdx;
                 }
+                if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+                {
+                    params.mPtrExpandedIdxToExpertIdx[expandedIdx] = expert;
+                }
                 if (params.mPtrPermutedIdxToExpandedIdx != nullptr && isLocal)
                 {
                     params.mPtrPermutedIdxToExpandedIdx[permutedIdx] = expandedIdx;
@@ -417,6 +425,10 @@ __global__ void routingIndicesDynBlockKernel(KernelParams params)
                 else
                 {
                     params.mPtrExpandedIdxToPermutedIdx[tokenIdx * params.mTopK + laneIdx] = int32_t{-1};
+                    if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+                    {
+                        params.mPtrExpandedIdxToExpertIdx[tokenIdx * params.mTopK + laneIdx] = int32_t{-1};
+                    }
                 }
             }
         }
@@ -626,6 +638,10 @@ __global__ void routingIndicesDynBlockKernel(KernelParams params)
                     if (params.mPtrExpandedIdxToPermutedIdx != nullptr)
                     {
                         params.mPtrExpandedIdxToPermutedIdx[expandedIdx] = permutedIdx;
+                    }
+                    if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+                    {
+                        params.mPtrExpandedIdxToExpertIdx[expandedIdx] = expert;
                     }
                     if (params.mPtrPermutedIdxToExpandedIdx != nullptr && isLocal)
                     {

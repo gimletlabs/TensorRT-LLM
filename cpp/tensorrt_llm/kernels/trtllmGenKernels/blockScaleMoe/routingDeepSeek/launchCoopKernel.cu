@@ -243,6 +243,10 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts) routingIndicesCoo
         {
             params.mPtrExpandedIdxToPermutedIdx[expandedIdx] = permutedIdx;
         }
+        if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+        {
+            params.mPtrExpandedIdxToExpertIdx[expandedIdx] = expertIdx;
+        }
         if (params.mPtrPermutedIdxToExpandedIdx != nullptr && isLocalExpert)
         {
             params.mPtrPermutedIdxToExpandedIdx[permutedIdx] = expandedIdx;

@@ -66,10 +66,10 @@ Runner::Runner(int32_t tileTokensDim)
 void Runner::run(void* routingLogits, void* routingBias, int32_t numTokens, int32_t numExperts, int32_t topK,
     int32_t nGroup, int32_t topkGroup, int32_t localExpertOffset, int32_t localNumExperts, float routedScalingFactor,
     int32_t* routingExpertIndexes, int32_t* expertCountHistogram, int32_t* permutedIdxSize,
-    int32_t* expandedIdxToPermutedIdx, int32_t* permutedIdxToExpandedIdx, int32_t* permutedIdxToTokenIdx,
-    void* expertWeights, int32_t* expertIds, int32_t* numTokensPerExpert, int32_t* ctaIdxXyToBatchIdx,
-    int32_t* ctaIdxXyToMnLimit, int32_t* numNonExitingCtas, btg::Dtype dtypeElt, bool useRoutingScalesOnInput,
-    bool useDeepSeekFp8, RoutingMethodType routingMethodType, cudaStream_t stream)
+    int32_t* expandedIdxToPermutedIdx, int32_t* expandedIdxToExpertIdx, int32_t* permutedIdxToExpandedIdx,
+    int32_t* permutedIdxToTokenIdx, void* expertWeights, int32_t* expertIds, int32_t* numTokensPerExpert,
+    int32_t* ctaIdxXyToBatchIdx, int32_t* ctaIdxXyToMnLimit, int32_t* numNonExitingCtas, btg::Dtype dtypeElt,
+    bool useRoutingScalesOnInput, bool useDeepSeekFp8, RoutingMethodType routingMethodType, cudaStream_t stream)
 {
     if (routingMethodType == RoutingMethodType::DeepSeekV3)
     {
@@ -84,6 +84,7 @@ void Runner::run(void* routingLogits, void* routingBias, int32_t numTokens, int3
         routingData.mPtrExpertCounts = expertCountHistogram;
         routingData.mPtrPermutedIdxSize = permutedIdxSize;
         routingData.mPtrExpandedIdxToPermutedIdx = expandedIdxToPermutedIdx;
+        routingData.mPtrExpandedIdxToExpertIdx = expandedIdxToExpertIdx;
         routingData.mPtrPermutedIdxToExpandedIdx = permutedIdxToExpandedIdx;
         routingData.mPtrPermutedIdxToTokenIdx = permutedIdxToTokenIdx;
         routingData.mPtrTopKWeights = expertWeights;
@@ -127,6 +128,7 @@ void Runner::run(void* routingLogits, void* routingBias, int32_t numTokens, int3
         routingData.mPtrExpertCounts = expertCountHistogram;
         routingData.mPtrPermutedIdxSize = permutedIdxSize;
         routingData.mPtrExpandedIdxToPermutedIdx = expandedIdxToPermutedIdx;
+        routingData.mPtrExpandedIdxToExpertIdx = expandedIdxToExpertIdx;
         routingData.mPtrPermutedIdxToExpandedIdx = permutedIdxToExpandedIdx;
         routingData.mPtrPermutedIdxToTokenIdx = permutedIdxToTokenIdx;
         routingData.mPtrTopKWeights = expertWeights;
@@ -183,6 +185,7 @@ void Runner::run(void* routingLogits, void* routingBias, int32_t numTokens, int3
         routingData.mPtrExpertCounts = expertCountHistogram;
         routingData.mPtrPermutedIdxSize = permutedIdxSize;
         routingData.mPtrExpandedIdxToPermutedIdx = expandedIdxToPermutedIdx;
+        routingData.mPtrExpandedIdxToExpertIdx = expandedIdxToExpertIdx;
         routingData.mPtrPermutedIdxToExpandedIdx = permutedIdxToExpandedIdx;
         routingData.mPtrPermutedIdxToTokenIdx = permutedIdxToTokenIdx;
         routingData.mPtrTopKWeights = expertWeights;
@@ -522,8 +525,8 @@ void Runner::setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace
             finalizeData.expertWeightsPtr = workspace.expert_weights;
         }
         finalizeData.expandedIdxToPermutedIdx = workspace.expanded_idx_to_permuted_idx;
-        finalizeData.expertIndexes = args.topk_ids != nullptr ? args.topk_ids : workspace.routing_expert_indexes;
-        finalizeData.expertIndexesArePacked = args.topk_ids == nullptr;
+        finalizeData.expertIndexes = args.topk_ids != nullptr ? args.topk_ids : workspace.expanded_idx_to_expert_idx;
+        finalizeData.expertIndexesArePacked = false;
         finalizeData.numTokens = args.num_tokens;
         finalizeData.numExperts = args.num_experts;
         finalizeData.topK = args.top_k;
@@ -729,8 +732,9 @@ void Runner::run(
         printDeviceFloats("hidden_states_scale (input)", static_cast<float const*>(hidden_states_scale_linear), 16, stream);
         printDeviceFloats("finalize_input_scale (input)", args.finalize_input_scale, 16, stream);
         printDeviceInts("topk_ids (input)", args.topk_ids, 16, stream);
+        printDeviceInts("expanded_idx_to_expert_idx (after routing)", workspace.expanded_idx_to_expert_idx, 16, stream);
         printPackedRoutingExpertIds(
-            "routing_expert_indexes packed (after routing)", workspace.routing_expert_indexes, 16, stream);
+            "routing_expert_indexes packed scratch (after routing)", workspace.routing_expert_indexes, 16, stream);
     }
 
     mPermuteGemm1.run(args.hidden_states, hidden_states_scale_linear, args.gemm1_weights, args.gemm1_weights_scale,
@@ -786,7 +790,8 @@ void Runner::run(
     if (args.do_finalize)
     {
         // Run finalize
-        TLLM_CHECK_WITH_INFO(args.finalize_input_scale == nullptr || workspace.routing_expert_indexes != nullptr,
+        TLLM_CHECK_WITH_INFO(args.finalize_input_scale == nullptr
+                || args.topk_ids != nullptr || workspace.expanded_idx_to_expert_idx != nullptr,
             "Finalize input scale factors require routing expert indexes.");
         moe::dev::finalize::run(finalizeData, stream);
         sync_check_cuda_error(stream);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -506,6 +506,10 @@ __device__ void routingPermutation(KernelParams params, PackedScoreIdx<BaseType>
         {
             params.mPtrExpandedIdxToPermutedIdx[expandedIdx] = permutedIdx;
         }
+        if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+        {
+            params.mPtrExpandedIdxToExpertIdx[expandedIdx] = expertIdx;
+        }
         if (params.mPtrPermutedIdxToExpandedIdx != nullptr && isLocalExpert)
         {
             params.mPtrPermutedIdxToExpandedIdx[permutedIdx] = expandedIdx;
@@ -926,6 +930,10 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts <= 1024 ? KernelPa
             if (params.mPtrExpandedIdxToPermutedIdx != nullptr)
             {
                 params.mPtrExpandedIdxToPermutedIdx[expandedIdx] = permutedIdx;
+            }
+            if (params.mPtrExpandedIdxToExpertIdx != nullptr)
+            {
+                params.mPtrExpandedIdxToExpertIdx[expandedIdx] = expertIdx;
             }
             if (params.mPtrPermutedIdxToExpandedIdx != nullptr && isLocalExpert)
             {
