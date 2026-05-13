@@ -715,6 +715,13 @@ __device__ __forceinline__ int32_t getExpertIdx(KernelParams const& params, int3
     return expertIndexes[expandedIdx];
 }
 
+template <typename KernelParams>
+__device__ __forceinline__ int32_t getPackedExpertIdxRaw(KernelParams const& params, int32_t expandedIdx)
+{
+    auto const* packedExpertIndexes = static_cast<int32_t const*>(params.expertIndexes);
+    return packedExpertIndexes[expandedIdx];
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename KernelParams>
@@ -755,6 +762,26 @@ __global__ void finalizeKernel(KernelParams params)
                 int const inIdx = permutedIdx * params.hiddenDimPadded + hiddenIdx;
                 int const inScaleIdx = expertIdx * params.hiddenDim + hiddenIdx;
                 float const inputScale = params.inScalePtr ? params.inScalePtr[inScaleIdx] : 1.0f;
+                if (params.inScalePtr != nullptr && tokenIdx == 0 && hiddenIdx < 4)
+                {
+                    if (params.expertIndexesArePacked)
+                    {
+                        int32_t const packedRaw = getPackedExpertIdxRaw(params, expandedIdx);
+                        int32_t const high16
+                            = static_cast<int16_t>((static_cast<uint32_t>(packedRaw) >> 16) & 0xffffU);
+                        int32_t const low16 = static_cast<int16_t>(static_cast<uint32_t>(packedRaw) & 0xffffU);
+                        printf("[MoE DBG] finalize scalar scale: token=%d k=%d expanded=%d permuted=%d expert=%d "
+                               "packed_raw=%d high16=%d low16=%d hidden=%d scale_idx=%d scale=%f\n",
+                            tokenIdx, k, expandedIdx, permutedIdx, expertIdx, packedRaw, high16, low16, hiddenIdx,
+                            inScaleIdx, inputScale);
+                    }
+                    else
+                    {
+                        printf("[MoE DBG] finalize scalar scale: token=%d k=%d expanded=%d permuted=%d expert=%d "
+                               "hidden=%d scale_idx=%d scale=%f\n",
+                            tokenIdx, k, expandedIdx, permutedIdx, expertIdx, hiddenIdx, inScaleIdx, inputScale);
+                    }
+                }
 
                 if (params.expertWeightsPtr != nullptr)
                 {
@@ -854,6 +881,27 @@ __global__ void finalizeKernelVecLoad(KernelParams params)
                     int const inScaleIdx = expertIdx * params.hiddenDim + hiddenIdx;
                     expertResult[idx] *= params.inScalePtr[inScaleIdx];
                 }
+                if (tokenIdx == 0 && elemIndex == 0)
+                {
+                    if (params.expertIndexesArePacked)
+                    {
+                        int32_t const packedRaw = getPackedExpertIdxRaw(params, expandedIdx);
+                        int32_t const high16
+                            = static_cast<int16_t>((static_cast<uint32_t>(packedRaw) >> 16) & 0xffffU);
+                        int32_t const low16 = static_cast<int16_t>(static_cast<uint32_t>(packedRaw) & 0xffffU);
+                        printf("[MoE DBG] finalize vec scale: token=%lld k=%d expanded=%d permuted=%d expert=%d "
+                               "packed_raw=%d high16=%d low16=%d hidden=0 scale_idx=%d scale=%f\n",
+                            static_cast<long long>(tokenIdx), k, expandedIdx, permutedIdx, expertIdx, packedRaw,
+                            high16, low16, expertIdx * params.hiddenDim, params.inScalePtr[expertIdx * params.hiddenDim]);
+                    }
+                    else
+                    {
+                        printf("[MoE DBG] finalize vec scale: token=%lld k=%d expanded=%d permuted=%d expert=%d "
+                               "hidden=0 scale_idx=%d scale=%f\n",
+                            static_cast<long long>(tokenIdx), k, expandedIdx, permutedIdx, expertIdx,
+                            expertIdx * params.hiddenDim, params.inScalePtr[expertIdx * params.hiddenDim]);
+                    }
+                }
             }
 
             threadOutput = threadOutput + scale * expertResult;
@@ -908,6 +956,27 @@ __global__ void finalizeDeepSeekKernel(KernelParams params)
                 int const inIdx = permutedIdx * params.hiddenDimPadded + hiddenIdx;
                 int const inScaleIdx = expertIdx * params.hiddenDim + hiddenIdx;
                 float const inputScale = params.inScalePtr ? params.inScalePtr[inScaleIdx] : 1.0f;
+                if (params.inScalePtr != nullptr && tokenIdx == 0 && hiddenIdx < 4)
+                {
+                    if (params.expertIndexesArePacked)
+                    {
+                        int32_t const packedRaw = getPackedExpertIdxRaw(params, expandedIdx);
+                        int32_t const high16
+                            = static_cast<int16_t>((static_cast<uint32_t>(packedRaw) >> 16) & 0xffffU);
+                        int32_t const low16 = static_cast<int16_t>(static_cast<uint32_t>(packedRaw) & 0xffffU);
+                        printf("[MoE DBG] finalize deepseek scale: token=%d k=%d expanded=%d permuted=%d expert=%d "
+                               "packed_raw=%d high16=%d low16=%d hidden=%d scale_idx=%d scale=%f block_scale=%f\n",
+                            tokenIdx, k, expandedIdx, permutedIdx, expertIdx, packedRaw, high16, low16, hiddenIdx,
+                            inScaleIdx, inputScale, blockScale);
+                    }
+                    else
+                    {
+                        printf("[MoE DBG] finalize deepseek scale: token=%d k=%d expanded=%d permuted=%d expert=%d "
+                               "hidden=%d scale_idx=%d scale=%f block_scale=%f\n",
+                            tokenIdx, k, expandedIdx, permutedIdx, expertIdx, hiddenIdx, inScaleIdx, inputScale,
+                            blockScale);
+                    }
+                }
 
                 float const expertProb = (float) params.expertWeightsPtr[tokenIdx * params.topK + k];
 
