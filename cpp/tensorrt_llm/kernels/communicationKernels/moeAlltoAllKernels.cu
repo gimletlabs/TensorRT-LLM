@@ -1175,11 +1175,24 @@ __global__ void moeA2ACombineKernel(
 
         if (blockIdx.x == 0)
         {
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+            asm volatile("fence.release.sys;" : : : "memory");
+#else
+            asm volatile("fence.acq_rel.sys;" : : : "memory");
+#endif
 #pragma unroll 1 // No unroll
             for (int peer_rank = lane_id; peer_rank < ep_size; peer_rank += warpSize)
             {
                 uint32_t* flag_addr = &ptrs.completion_flags[peer_rank][rank_id];
-                asm volatile("st.relaxed.sys.u32 [%0], %1;" ::"l"(flag_addr), "r"(expected_value));
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+                asm volatile("st.release.sys.u32 [%0], %1;"
+                             ::"l"(flag_addr), "r"(expected_value)
+                             : "memory");
+#else
+                asm volatile("st.relaxed.sys.u32 [%0], %1;"
+                             ::"l"(flag_addr), "r"(expected_value)
+                             : "memory");
+#endif
 #if ENABLE_DEBUG_PRINT
                 printf("combine: +++Rank %d setting completion flag to %d for rank %d\n", rank_id, expected_value,
                     peer_rank);
@@ -1196,8 +1209,17 @@ __global__ void moeA2ACombineKernel(
             {
                 uint32_t* flag_ptr = &ptrs.completion_flags[rank_id][peer_rank];
                 uint32_t flag_value;
-                // Acquire load to ensure visibility of peer's release-store
-                asm volatile("ld.relaxed.sys.u32 %0, [%1];" : "=r"(flag_value) : "l"(flag_ptr));
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+                asm volatile("ld.acquire.sys.u32 %0, [%1];"
+                             : "=r"(flag_value)
+                             : "l"(flag_ptr)
+                             : "memory");
+#else
+                asm volatile("ld.relaxed.sys.u32 %0, [%1];"
+                             : "=r"(flag_value)
+                             : "l"(flag_ptr)
+                             : "memory");
+#endif
 #if ENABLE_DEBUG_PRINT
                 printf(
                     "combine: ---Rank %d received completion flag from rank %d, flag_value: %d, expected_value: "
@@ -1217,9 +1239,9 @@ __global__ void moeA2ACombineKernel(
         }
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
         // .acquire and .release qualifiers for fence instruction require sm_90 or higher.
-        asm volatile("fence.acquire.sys;");
+        asm volatile("fence.acquire.sys;" : : : "memory");
 #else
-        asm volatile("fence.acq_rel.sys;");
+        asm volatile("fence.acq_rel.sys;" : : : "memory");
 #endif
     }
     __syncthreads();
