@@ -141,66 +141,6 @@ using tensorrt_llm::common::launchWithPdlWhenEnabled;
     }                                                                                                                  \
     }
 
-#define SWITCH_COMBINE_TOP_K(top_k, TOP_K, ...)                                                                        \
-    switch (top_k)                                                                                                     \
-    {                                                                                                                  \
-    case 8:                                                                                                            \
-    {                                                                                                                  \
-        constexpr int TOP_K = 8;                                                                                       \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    case 4:                                                                                                            \
-    {                                                                                                                  \
-        constexpr int TOP_K = 4;                                                                                       \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    case 2:                                                                                                            \
-    {                                                                                                                  \
-        constexpr int TOP_K = 2;                                                                                       \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    case 1:                                                                                                            \
-    {                                                                                                                  \
-        constexpr int TOP_K = 1;                                                                                       \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    default:                                                                                                           \
-    {                                                                                                                  \
-        TLLM_CHECK_WITH_INFO(false, "Unsupported top_k for moe_a2a_combine");                                          \
-    }                                                                                                                  \
-    }
-
-#define SWITCH_COMBINE_DTYPE(dtype, TYPE, ...)                                                                         \
-    switch (dtype)                                                                                                     \
-    {                                                                                                                  \
-    case nvinfer1::DataType::kHALF:                                                                                    \
-    {                                                                                                                  \
-        using TYPE = half;                                                                                             \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    case nvinfer1::DataType::kBF16:                                                                                    \
-    {                                                                                                                  \
-        using TYPE = __nv_bfloat16;                                                                                    \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    case nvinfer1::DataType::kFLOAT:                                                                                   \
-    {                                                                                                                  \
-        using TYPE = float;                                                                                            \
-        __VA_ARGS__;                                                                                                   \
-        break;                                                                                                         \
-    }                                                                                                                  \
-    default:                                                                                                           \
-    {                                                                                                                  \
-        TLLM_CHECK_WITH_INFO(false, "Unsupported dtype for moe_a2a_combine");                                          \
-    }                                                                                                                  \
-    }
-
 #define SWITCH_POLICY(one_block_per_token, POLICY, ...)                                                                \
     if (one_block_per_token)                                                                                           \
     {                                                                                                                  \
@@ -1040,123 +980,6 @@ __device__ void vectorized_combine(T* dst_typed_base, int size_per_token, int st
     }
 }
 
-template <int VEC_SIZE, int TOP_K, typename ThreadingPolicy, typename T>
-__device__ void vectorized_combine_same_type_impl(
-    T* dst_typed_base, int size_per_token, int rank_id, int max_tokens_per_rank, CombineKernelPointers const& ptrs)
-{
-    constexpr int elems_per_vec = VEC_SIZE / static_cast<int>(sizeof(T));
-    using flashinfer::vec_t;
-
-    auto* dst_bytes = reinterpret_cast<uint8_t*>(dst_typed_base);
-    int const stride = ThreadingPolicy::stride() * VEC_SIZE;
-    int const local_token_idx = ThreadingPolicy::token_idx();
-
-    for (int offset = ThreadingPolicy::offset() * VEC_SIZE; offset < size_per_token; offset += stride)
-    {
-        vec_t<uint8_t, VEC_SIZE> acc[TOP_K];
-
-#pragma unroll
-        for (int k = 0; k < TOP_K; ++k)
-        {
-            int target_rank = ptrs.topk_target_ranks[local_token_idx * TOP_K + k];
-            int dst_idx = ptrs.topk_send_indices[local_token_idx * TOP_K + k];
-            if (dst_idx < 0)
-            {
-                acc[k].fill(0);
-                continue;
-            }
-
-            auto const* recv_buffer = static_cast<uint8_t const*>(ptrs.recv_buffers[target_rank][0]);
-            size_t base_source_rank = static_cast<size_t>(rank_id) * static_cast<size_t>(max_tokens_per_rank)
-                + static_cast<size_t>(dst_idx);
-            size_t base_token = base_source_rank * static_cast<size_t>(size_per_token);
-            acc[k].load(recv_buffer + base_token + offset);
-        }
-
-        if constexpr (TOP_K == 8)
-        {
-            T* a0 = reinterpret_cast<T*>(&acc[0]);
-            T* a1 = reinterpret_cast<T*>(&acc[1]);
-            T* a2 = reinterpret_cast<T*>(&acc[2]);
-            T* a3 = reinterpret_cast<T*>(&acc[3]);
-            T* a4 = reinterpret_cast<T*>(&acc[4]);
-            T* a5 = reinterpret_cast<T*>(&acc[5]);
-            T* a6 = reinterpret_cast<T*>(&acc[6]);
-            T* a7 = reinterpret_cast<T*>(&acc[7]);
-#pragma unroll
-            for (int j = 0; j < elems_per_vec; ++j)
-            {
-                a0[j] += a1[j];
-                a2[j] += a3[j];
-                a4[j] += a5[j];
-                a6[j] += a7[j];
-            }
-#pragma unroll
-            for (int j = 0; j < elems_per_vec; ++j)
-            {
-                a0[j] += a2[j];
-                a4[j] += a6[j];
-            }
-#pragma unroll
-            for (int j = 0; j < elems_per_vec; ++j)
-            {
-                a0[j] += a4[j];
-            }
-        }
-        else if constexpr (TOP_K == 4)
-        {
-            T* a0 = reinterpret_cast<T*>(&acc[0]);
-            T* a1 = reinterpret_cast<T*>(&acc[1]);
-            T* a2 = reinterpret_cast<T*>(&acc[2]);
-            T* a3 = reinterpret_cast<T*>(&acc[3]);
-#pragma unroll
-            for (int j = 0; j < elems_per_vec; ++j)
-            {
-                a0[j] += a1[j];
-                a2[j] += a3[j];
-            }
-#pragma unroll
-            for (int j = 0; j < elems_per_vec; ++j)
-            {
-                a0[j] += a2[j];
-            }
-        }
-        else if constexpr (TOP_K == 2)
-        {
-            T* a0 = reinterpret_cast<T*>(&acc[0]);
-            T* a1 = reinterpret_cast<T*>(&acc[1]);
-#pragma unroll
-            for (int j = 0; j < elems_per_vec; ++j)
-            {
-                a0[j] += a1[j];
-            }
-        }
-
-        acc[0].store(dst_bytes + offset);
-    }
-}
-
-template <int TOP_K, typename ThreadingPolicy, typename T>
-__device__ void vectorized_combine_same_type(
-    T* dst_typed_base, int size_per_token, int rank_id, int max_tokens_per_rank, CombineKernelPointers const& ptrs)
-{
-    if (size_per_token % 16 == 0)
-        vectorized_combine_same_type_impl<16, TOP_K, ThreadingPolicy, T>(
-            dst_typed_base, size_per_token, rank_id, max_tokens_per_rank, ptrs);
-    else if (size_per_token % 8 == 0)
-        vectorized_combine_same_type_impl<8, TOP_K, ThreadingPolicy, T>(
-            dst_typed_base, size_per_token, rank_id, max_tokens_per_rank, ptrs);
-    else if (size_per_token % 4 == 0)
-        vectorized_combine_same_type_impl<4, TOP_K, ThreadingPolicy, T>(
-            dst_typed_base, size_per_token, rank_id, max_tokens_per_rank, ptrs);
-    else if (size_per_token % 2 == 0)
-        vectorized_combine_same_type_impl<2, TOP_K, ThreadingPolicy, T>(
-            dst_typed_base, size_per_token, rank_id, max_tokens_per_rank, ptrs);
-    else
-        vectorized_combine_same_type_impl<1, TOP_K, ThreadingPolicy, T>(
-            dst_typed_base, size_per_token, rank_id, max_tokens_per_rank, ptrs);
-}
-
 // ---- vec_convert: per-vector type conversion, specialized by PTX where available ----
 // Generic: SrcT → float → DstT (all architectures, all type combinations).
 template <size_t VEC_SIZE, typename SrcT, typename DstT>
@@ -1256,6 +1079,11 @@ template <typename ThreadingPolicy, bool LOW_PRECISION, typename SrcT>
 __global__ void moeA2APrepareCombineKernel(uint8_t* recv_buffer_bytes, void const* payload, int elements_per_token,
     int ep_size, int max_tokens_per_rank, uint32_t* flag_val_ptr, int const* recv_counters, int stride_per_token)
 {
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    cudaGridDependencySynchronize();
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
+
     if (blockIdx.x == 0 && threadIdx.x == 0)
     {
         // Increment flag_val for this combine round
@@ -1331,6 +1159,11 @@ __global__ void moeA2ACombineKernel(
             return;
     }
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    cudaGridDependencySynchronize();
+#endif
+
+#if !DISABLE_SYNC_FOR_PROFILING
     // In-kernel readiness synchronization at start of combine:
     // - One warp signals readiness to all peers with current flag_val.
     // - The first warp of each block waits for all peers' readiness (equality), then __syncthreads.
@@ -1371,7 +1204,7 @@ __global__ void moeA2ACombineKernel(
         for (int peer_rank = lane_id; peer_rank < ep_size; peer_rank += warpSize)
         {
             bool flag_set = false;
-            [[maybe_unused]] auto s = clock64();
+            auto s = clock64();
             do
             {
                 uint32_t* flag_ptr = &ptrs.completion_flags[rank_id][peer_rank];
@@ -1412,6 +1245,7 @@ __global__ void moeA2ACombineKernel(
 #endif
     }
     __syncthreads();
+#endif
 
     if (local_num_tokens == 0)
         return;
@@ -1430,9 +1264,13 @@ __global__ void moeA2ACombineKernel(
     {
         // Get output location for this token (using src_data_ptrs[0] as output)
         T* token_output = static_cast<T*>(ptrs.src_data_ptrs[0]) + local_token_idx * elements_per_token;
-        vectorized_combine_same_type<TOP_K, ThreadingPolicy, T>(
-            token_output, size_per_token, rank_id, max_tokens_per_rank, ptrs);
+        // Accumulate across ranks in registers, then store once per segment
+        vectorized_combine<TOP_K, ThreadingPolicy, T>(
+            token_output, size_per_token, stride_per_token, rank_id, max_tokens_per_rank, ptrs);
     }
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void moe_a2a_prepare_combine_launch(MoeA2ACombineParams const& params)
@@ -1440,31 +1278,35 @@ void moe_a2a_prepare_combine_launch(MoeA2ACombineParams const& params)
     constexpr int kBlockSize = 256;
     constexpr int kWarpsPerBlock = kBlockSize / 32; // 8 warps per block
 
-    TLLM_CHECK_WITH_INFO(!params.use_low_precision, "MoE A2A combine does not support low precision combine");
-
+    // FP8 in-place (payload_in_workspace=true, prepare_payload==nullptr): each CTA writes
+    // FP8 at the BF16-stride position, so CTAs never race — all tokens must be processed.
     // Copy path with null payload is a no-op; 1 block suffices for the flag increment only.
-    int total_slots = params.prepare_payload == nullptr ? 1 : params.ep_size * params.max_tokens_per_rank;
-    int grid_size_warp = ceilDiv(total_slots, kWarpsPerBlock);
-    int grid_size_block = total_slots; // one block per token
+    int global_token_num = (params.use_low_precision || params.prepare_payload != nullptr)
+        ? params.ep_size * params.max_tokens_per_rank
+        : 1;
+    int grid_size_warp = ceilDiv(global_token_num, kWarpsPerBlock);
+    int grid_size_block = global_token_num; // one block per token
     int grid = params.one_block_per_token ? grid_size_block : grid_size_warp;
 
     uint8_t* recv_buffer_bytes = static_cast<uint8_t*>(const_cast<void*>(params.recv_buffers[params.ep_rank]));
     void const* payload = params.prepare_payload;
 
-    SWITCH_COMBINE_DTYPE(params.dtype, SrcT, {
-            int const stride_per_token = params.elements_per_token * static_cast<int>(sizeof(SrcT));
-            if (params.one_block_per_token)
-            {
-                moeA2APrepareCombineKernel<BlockPolicy, false, SrcT><<<grid, kBlockSize, 0, params.stream>>>(
-                    recv_buffer_bytes, payload, params.elements_per_token, params.ep_size, params.max_tokens_per_rank,
-                    params.flag_val, params.recv_counters, stride_per_token);
-            }
-            else
-            {
-                moeA2APrepareCombineKernel<WarpPolicy, false, SrcT><<<grid, kBlockSize, 0, params.stream>>>(
-                    recv_buffer_bytes, payload, params.elements_per_token, params.ep_size, params.max_tokens_per_rank,
-                    params.flag_val, params.recv_counters, stride_per_token);
-            }
+    // stride_per_token is computed once on the host and passed to the kernel to avoid
+    // per-thread recomputation:
+    //   FP8 external: EPT × 1        (compact FP8, dst packed tightly)
+    //   FP8 in-place / byte-copy: EPT × sizeof(SrcT)  (payload-dtype stride)
+    SWITCH_BOOL(params.use_low_precision, LOW_PRECISION, {
+        SWITCH_DTYPE(params.dtype, SrcT, {
+            bool const low_precision_staged = LOW_PRECISION && (params.prepare_payload != nullptr);
+            int const stride_per_token = low_precision_staged
+                ? params.elements_per_token
+                : params.elements_per_token * static_cast<int>(sizeof(SrcT));
+            auto kernel_fn = params.one_block_per_token ? moeA2APrepareCombineKernel<BlockPolicy, LOW_PRECISION, SrcT>
+                                                        : moeA2APrepareCombineKernel<WarpPolicy, LOW_PRECISION, SrcT>;
+            launchWithPdlWhenEnabled("moeA2APrepareCombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
+                recv_buffer_bytes, payload, params.elements_per_token, params.ep_size, params.max_tokens_per_rank,
+                params.flag_val, params.recv_counters, stride_per_token);
+        });
     });
 }
 
@@ -1479,9 +1321,6 @@ void moe_a2a_combine_launch(MoeA2ACombineParams const& params)
     TLLM_CHECK(params.ep_size > 0 && params.ep_size <= kMaxRanks);
     TLLM_CHECK(params.local_num_tokens >= 0);
     TLLM_CHECK(params.elements_per_token > 0);
-    TLLM_CHECK_WITH_INFO(params.top_k == 1 || params.top_k == 2 || params.top_k == 4 || params.top_k == 8,
-        "Unsupported top_k for moe_a2a_combine_launch");
-    TLLM_CHECK_WITH_INFO(!params.use_low_precision, "MoE A2A combine does not support low precision combine");
 
     // Configure kernel launch
     int const kBlockSize = tensorrt_llm::common::getEnvMoeA2ACombineBlockSize();
@@ -1523,16 +1362,26 @@ void moe_a2a_combine_launch(MoeA2ACombineParams const& params)
 
     int grid = params.one_block_per_token ? grid_size_block : grid_size_warp;
 
+    // stride_per_token: byte distance between tokens in the recv buffer.
+    //   FP8 external payload: EPT × 1            (compact FP8 layout)
+    //   FP8 in-place / non-FP8: EPT × sizeof(PayloadT)  (payload-dtype stride)
+    bool const low_precision_staged = params.use_low_precision && (params.prepare_payload != nullptr);
     int stride_per_token;
-    SWITCH_COMBINE_DTYPE(params.dtype, PayloadT, {
-        stride_per_token = params.elements_per_token * static_cast<int>(sizeof(PayloadT));
+    SWITCH_DTYPE(params.dtype, PayloadT, {
+        stride_per_token = low_precision_staged ? params.elements_per_token
+                                                : params.elements_per_token * static_cast<int>(sizeof(PayloadT));
     });
 
+    // When use_low_precision is set the recv buffers contain FP8 data regardless of params.dtype,
+    // so dispatch the FP8 accumulation kernel in that case.
+    auto const effective_dtype = params.use_low_precision ? nvinfer1::DataType::kFP8 : params.dtype;
+
     // Launch appropriate kernel with compact macros
-    SWITCH_COMBINE_DTYPE(params.dtype, TKernelType, {
+    SWITCH_DTYPE(effective_dtype, TKernelType, {
         SWITCH_POLICY(params.one_block_per_token, Policy, {
-            SWITCH_COMBINE_TOP_K(params.top_k, TOP_K, {
-                moeA2ACombineKernel<TKernelType, Policy, TOP_K><<<grid, kBlockSize, 0, params.stream>>>(
+            SWITCH_TOP_K(params.top_k, TOP_K, {
+                auto kernel_fn = moeA2ACombineKernel<TKernelType, Policy, TOP_K>;
+                launchWithPdlWhenEnabled("moeA2ACombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
                     kernel_ptrs, params.max_tokens_per_rank, params.elements_per_token, params.local_num_tokens,
                     params.ep_rank, params.ep_size, stride_per_token);
             });
