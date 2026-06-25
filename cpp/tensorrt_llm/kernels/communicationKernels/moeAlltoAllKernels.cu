@@ -1079,11 +1079,6 @@ template <typename ThreadingPolicy, bool LOW_PRECISION, typename SrcT>
 __global__ void moeA2APrepareCombineKernel(uint8_t* recv_buffer_bytes, void const* payload, int elements_per_token,
     int ep_size, int max_tokens_per_rank, uint32_t* flag_val_ptr, int const* recv_counters, int stride_per_token)
 {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaGridDependencySynchronize();
-    cudaTriggerProgrammaticLaunchCompletion();
-#endif
-
     if (blockIdx.x == 0 && threadIdx.x == 0)
     {
         // Increment flag_val for this combine round
@@ -1158,10 +1153,6 @@ __global__ void moeA2ACombineKernel(
         if (local_token_idx >= local_num_tokens)
             return;
     }
-
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaGridDependencySynchronize();
-#endif
 
 #if !DISABLE_SYNC_FOR_PROFILING
     // In-kernel readiness synchronization at start of combine:
@@ -1246,9 +1237,6 @@ __global__ void moeA2ACombineKernel(
         vectorized_combine<TOP_K, ThreadingPolicy, T>(
             token_output, size_per_token, stride_per_token, rank_id, max_tokens_per_rank, ptrs);
     }
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaTriggerProgrammaticLaunchCompletion();
-#endif
 }
 
 void moe_a2a_prepare_combine_launch(MoeA2ACombineParams const& params)
@@ -1281,9 +1269,8 @@ void moe_a2a_prepare_combine_launch(MoeA2ACombineParams const& params)
                 : params.elements_per_token * static_cast<int>(sizeof(SrcT));
             auto kernel_fn = params.one_block_per_token ? moeA2APrepareCombineKernel<BlockPolicy, LOW_PRECISION, SrcT>
                                                         : moeA2APrepareCombineKernel<WarpPolicy, LOW_PRECISION, SrcT>;
-            launchWithPdlWhenEnabled("moeA2APrepareCombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
-                recv_buffer_bytes, payload, params.elements_per_token, params.ep_size, params.max_tokens_per_rank,
-                params.flag_val, params.recv_counters, stride_per_token);
+            kernel_fn<<<grid, kBlockSize, 0, params.stream>>>(recv_buffer_bytes, payload, params.elements_per_token,
+                params.ep_size, params.max_tokens_per_rank, params.flag_val, params.recv_counters, stride_per_token);
         });
     });
 }
@@ -1359,9 +1346,9 @@ void moe_a2a_combine_launch(MoeA2ACombineParams const& params)
         SWITCH_POLICY(params.one_block_per_token, Policy, {
             SWITCH_TOP_K(params.top_k, TOP_K, {
                 auto kernel_fn = moeA2ACombineKernel<TKernelType, Policy, TOP_K>;
-                launchWithPdlWhenEnabled("moeA2ACombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
-                    kernel_ptrs, params.max_tokens_per_rank, params.elements_per_token, params.local_num_tokens,
-                    params.ep_rank, params.ep_size, stride_per_token);
+                kernel_fn<<<grid, kBlockSize, 0, params.stream>>>(kernel_ptrs, params.max_tokens_per_rank,
+                    params.elements_per_token, params.local_num_tokens, params.ep_rank, params.ep_size,
+                    stride_per_token);
             });
         });
     });
