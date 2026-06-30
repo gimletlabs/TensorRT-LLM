@@ -1159,10 +1159,6 @@ __global__ void moeA2ACombineKernel(
             return;
     }
 
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaGridDependencySynchronize();
-#endif
-
 #if !DISABLE_SYNC_FOR_PROFILING
     // In-kernel readiness synchronization at start of combine:
     // - One warp signals readiness to all peers with current flag_val.
@@ -1246,9 +1242,6 @@ __global__ void moeA2ACombineKernel(
         vectorized_combine<TOP_K, ThreadingPolicy, T>(
             token_output, size_per_token, stride_per_token, rank_id, max_tokens_per_rank, ptrs);
     }
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaTriggerProgrammaticLaunchCompletion();
-#endif
 }
 
 void moe_a2a_prepare_combine_launch(MoeA2ACombineParams const& params)
@@ -1359,9 +1352,9 @@ void moe_a2a_combine_launch(MoeA2ACombineParams const& params)
         SWITCH_POLICY(params.one_block_per_token, Policy, {
             SWITCH_TOP_K(params.top_k, TOP_K, {
                 auto kernel_fn = moeA2ACombineKernel<TKernelType, Policy, TOP_K>;
-                launchWithPdlWhenEnabled("moeA2ACombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
-                    kernel_ptrs, params.max_tokens_per_rank, params.elements_per_token, params.local_num_tokens,
-                    params.ep_rank, params.ep_size, stride_per_token);
+                kernel_fn<<<grid, kBlockSize, 0, params.stream>>>(kernel_ptrs, params.max_tokens_per_rank,
+                    params.elements_per_token, params.local_num_tokens, params.ep_rank, params.ep_size,
+                    stride_per_token);
             });
         });
     });
