@@ -1135,7 +1135,7 @@ __global__ void moeA2APrepareCombineKernel(uint8_t* recv_buffer_bytes, void cons
 // Generic Combine Kernel Implementation (Templated by data type)
 // ============================================================================
 
-template <typename T, typename ThreadingPolicy, int TOP_K>
+template <typename T, typename ThreadingPolicy, int TOP_K, bool ENABLE_PDL>
 __global__ void moeA2ACombineKernel(
     const CombineKernelPointers ptrs, // Combine-specific struct, src_data_ptrs[0] is output
     int max_tokens_per_rank, int elements_per_token, int local_num_tokens, int rank_id, int ep_size,
@@ -1160,7 +1160,10 @@ __global__ void moeA2ACombineKernel(
     }
 
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaGridDependencySynchronize();
+    if constexpr (ENABLE_PDL)
+    {
+        cudaGridDependencySynchronize();
+    }
 #endif
 
 #if !DISABLE_SYNC_FOR_PROFILING
@@ -1247,7 +1250,10 @@ __global__ void moeA2ACombineKernel(
             token_output, size_per_token, stride_per_token, rank_id, max_tokens_per_rank, ptrs);
     }
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    cudaTriggerProgrammaticLaunchCompletion();
+    if constexpr (ENABLE_PDL)
+    {
+        cudaTriggerProgrammaticLaunchCompletion();
+    }
 #endif
 }
 
@@ -1354,14 +1360,28 @@ void moe_a2a_combine_launch(MoeA2ACombineParams const& params)
     // so dispatch the FP8 accumulation kernel in that case.
     auto const effective_dtype = params.use_low_precision ? nvinfer1::DataType::kFP8 : params.dtype;
 
+    bool const enablePDL
+        = tensorrt_llm::common::getEnvEnablePDL() && !tensorrt_llm::common::getEnvDisablePdlMoeCombine();
+
     // Launch appropriate kernel with compact macros
     SWITCH_DTYPE(effective_dtype, TKernelType, {
         SWITCH_POLICY(params.one_block_per_token, Policy, {
             SWITCH_TOP_K(params.top_k, TOP_K, {
-                auto kernel_fn = moeA2ACombineKernel<TKernelType, Policy, TOP_K>;
-                launchWithPdlWhenEnabled("moeA2ACombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
-                    kernel_ptrs, params.max_tokens_per_rank, params.elements_per_token, params.local_num_tokens,
-                    params.ep_rank, params.ep_size, stride_per_token);
+                if (enablePDL)
+                {
+                    auto kernel_fn = moeA2ACombineKernel<TKernelType, Policy, TOP_K, true>;
+                    launchWithPdlWhenEnabled("moeA2ACombineKernel", kernel_fn, grid, kBlockSize, 0, params.stream,
+                        kernel_ptrs, params.max_tokens_per_rank, params.elements_per_token, params.local_num_tokens,
+                        params.ep_rank, params.ep_size, stride_per_token);
+                }
+                else
+                {
+                    auto kernel_fn = moeA2ACombineKernel<TKernelType, Policy, TOP_K, false>;
+                    kernel_fn<<<grid, kBlockSize, 0, params.stream>>>(kernel_ptrs, params.max_tokens_per_rank,
+                        params.elements_per_token, params.local_num_tokens, params.ep_rank, params.ep_size,
+                        stride_per_token);
+                    TLLM_CUDA_CHECK(cudaGetLastError());
+                }
             });
         });
     });

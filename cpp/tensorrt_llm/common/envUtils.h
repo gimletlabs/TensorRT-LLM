@@ -164,6 +164,9 @@ int getEnvMoeA2ADispatchBlockSize();
 // Block size (threads per block) for MoE A2A Combine kernels (default 256 if unset or invalid)
 int getEnvMoeA2ACombineBlockSize();
 
+// Whether PDL is disabled for the MoE A2A Combine kernel (default false).
+bool getEnvDisablePdlMoeCombine();
+
 bool getEnvKVCacheTransferAllBlocksForWindow();
 
 bool getEnvEplbForceGdrcopy();
