@@ -575,6 +575,12 @@ int getEnvMoeA2ACombineBlockSize()
     return kBlock;
 }
 
+bool getEnvDisablePdlMoeCombine()
+{
+    static bool const disablePdlMoeCombine = getBoolEnv("TLLM_DISABLE_PDL_MOE_COMBINE");
+    return disablePdlMoeCombine;
+}
+
 bool getEnvEplbForceGdrcopy()
 {
     return getBoolEnv("TRTLLM_EPLB_FORCE_GDRCOPY");
