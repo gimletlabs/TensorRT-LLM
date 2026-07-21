@@ -33,11 +33,12 @@ void launchOffsetsKernel(Data const& data, int numBlocksOffsets, uint32_t numThr
 void run(Data const& data, void* stream)
 {
     TLLM_CHECK_WITH_INFO(data.mPtrTopKPacked != nullptr || data.mPtrScores != nullptr || data.mPtrTopKIds != nullptr,
-        "Routing kernel requires at least one input parameter");
-    if (data.mPtrTopKIds != nullptr)
+        "Routing kernel requires mPtrScores (logits), mPtrTopKPacked staging, and/or mPtrTopKIds");
+    if (data.mPtrScores != nullptr && data.mPtrTopKPacked == nullptr)
     {
-        TLLM_CHECK_WITH_INFO(data.mPtrTopKWeights != nullptr,
-            "When mPtrTopKIds is provided, mPtrTopKWeights must also be provided for Renormalize routing.");
+        TLLM_CHECK_WITH_INFO(data.mPtrTopKIds != nullptr && data.mPtrTopKWeights != nullptr,
+            "Renormalize from logits (mPtrScores without mPtrTopKPacked) requires mPtrTopKIds and mPtrTopKWeights "
+            "outputs.");
     }
     TLLM_CHECK_WITH_INFO(data.mPtrPermutedIdxSize != nullptr && data.mPtrCtaIdxXyToBatchIdx != nullptr
             && data.mPtrCtaIdxXyToMnLimit != nullptr && data.mPtrNumNonExitingCtas != nullptr,
@@ -53,14 +54,14 @@ void run(Data const& data, void* stream)
     bool const useSingleBlock = data.mNumTokens <= BlockKernelMaxNumTokens
         || (data.mNumTokens <= DynBlockKernelMaxNumTokens && data.mNumExperts <= DynBlockKernelMaxNumExperts);
 
-    bool const useSingleCluster = data.mNumTokens <= ((data.mPtrScores != nullptr || data.mPtrTopKIds != nullptr)
-                                          ? MaxNumTokensSingleClusterScores
-                                          : MaxNumTokensSingleCluster);
+    bool const useSingleCluster = data.mNumTokens
+        <= ((data.mPtrScores != nullptr || data.mPtrTopKIds != nullptr) ? MaxNumTokensSingleClusterScores
+                                                                        : MaxNumTokensSingleCluster);
 
     if (!useSingleCluster && !useSingleBlock)
     {
         TLLM_CHECK_WITH_INFO((data.mPtrTopKPacked != nullptr || data.mPtrTopKIds != nullptr),
-            "When #tokens is large, `mPtrTopKPacked` or `mPtrTopKIds` is a required input.");
+            "When #tokens is large, `mPtrTopKPacked` staging or `mPtrTopKIds` input is required.");
         TLLM_CHECK_WITH_INFO(
             data.mPtrExpertCounts != nullptr, "When #tokens is large, `mPtrExpertCounts` is a required input.");
     }
@@ -89,7 +90,7 @@ void run(Data const& data, void* stream)
         int const numBlocksOffsets
             = std::min((expandedIdxSize + offsetEltsPerBlock - 1) / offsetEltsPerBlock, maxNumBlocks);
 
-        if (data.mPtrScores != nullptr && data.mPtrTopKIds == nullptr)
+        if (data.mPtrScores != nullptr)
         {
             launchHistogramScoresKernel(data, maxNumBlocks, numThreadsHist, stream);
         }
