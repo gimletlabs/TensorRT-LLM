@@ -5,7 +5,11 @@ set -ex
 # Use latest stable version from https://pypi.org/project/torch/#history
 # and closest to the version specified in
 # https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-26-02.html#rel-26-02
-TORCH_VERSION="2.10.0"
+# Overridable so a consumer can build libth_common.so against the SAME torch its libtorch
+# ships. c10 has no cross-minor-version ABI guarantee and libth_common inlines
+# c10::TensorImpl accessors, so a skew is silent at load time and surfaces at runtime as
+# "Cannot access data pointer of Tensor that doesn't have storage". Default unchanged.
+TORCH_VERSION="${TORCH_VERSION:-2.10.0}"
 SYSTEM_ID=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
 
 prepare_environment() {
