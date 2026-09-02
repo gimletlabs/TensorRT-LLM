@@ -471,6 +471,14 @@ void XqaDispatcher::runImpl(
         tllmRunnerParams.mMaxSeqLenCacheKv = params.max_attention_window_size;
         tllmRunnerParams.mMaxSeqLenQ = params.generation_input_length;
         tllmRunnerParams.mMaxSeqLenKv = params.max_past_kv_length;
+        // PagedKv TMA strides do not depend on mMaxSeqLenKv. Size TMA/grid from cache capacity so a
+        // CUDA-graph captured launch stays valid as decode KV grows. Excess KV CTAs early-exit via
+        // seqLensKvPtr. ContiguousKv keeps the runtime length because its strides are
+        // mMaxSeqLenKv-dependent. Matches NVIDIA TensorRT-LLM #13312.
+        if constexpr (std::is_same_v<KVCacheBuffer, KVBlockArray>)
+        {
+            tllmRunnerParams.mMaxSeqLenKv = params.max_attention_window_size;
+        }
         tllmRunnerParams.mSumOfSeqLensQ = int(params.batch_size * beam_width * tllmRunnerParams.mMaxSeqLenQ);
         // The sliding window attention size.
         tllmRunnerParams.mAttentionWindowSize = params.cyclic_attention_window_size;

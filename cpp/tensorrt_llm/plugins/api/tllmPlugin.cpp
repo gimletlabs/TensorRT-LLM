@@ -310,4 +310,14 @@ extern "C"
         nbCreators = creators.size();
         return creators.data();
     }
+
+    void tllmResetCudaGraphGenerationUnsafeFlag()
+    {
+        tensorrt_llm::common::op::resetCudaGraphGenerationUnsafeFlag();
+    }
+
+    bool tllmCudaGraphGenerationUnsafeFlag()
+    {
+        return tensorrt_llm::common::op::cudaGraphGenerationUnsafeFlag();
+    }
 } // extern "C"
