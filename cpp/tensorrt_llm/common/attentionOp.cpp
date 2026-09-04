@@ -61,9 +61,7 @@ bool cudaGraphGenerationUnsafeFlag()
 
 void markCudaGraphGenerationUnsafeIfCapturing(cudaStream_t stream)
 {
-    cudaStreamCaptureStatus status;
-    auto const err = cudaStreamIsCapturing(stream, &status);
-    if (err == cudaSuccess && status == cudaStreamCaptureStatusActive)
+    if (isCapturing(stream))
     {
         gCudaGraphGenerationUnsafe = true;
     }
@@ -1125,7 +1123,8 @@ int AttentionOp::mlaGeneration(
         tllmRunnerParams.mMaxSeqLenQ = params.acc_q_len / batch_beam;
         // mlaGeneration always uses QkvLayout::PagedKv, so TMA/grid can be sized from cache
         // capacity. Live bounds come from seqLensKvPtr. Matches NVIDIA TensorRT-LLM #13312.
-        tllmRunnerParams.mMaxSeqLenKv = generation_params.max_attention_window_size;
+        tllmRunnerParams.mMaxSeqLenKv = isCapturing(stream) ? generation_params.max_attention_window_size
+                                                            : generation_params.max_past_kv_length;
         tllmRunnerParams.mSumOfSeqLensQ = int(batch_beam * tllmRunnerParams.mMaxSeqLenQ);
         // Not used in the generation kernels as contiguous_kv or paged_kv layouts are used.
         tllmRunnerParams.mSumOfSeqLensKv = int(batch_beam * tllmRunnerParams.mMaxSeqLenKv);
@@ -1314,7 +1313,8 @@ int AttentionOp::mlaGeneration(
         fmhaParams.numGroupedHeads = params.head_num;
         fmhaParams.qSeqLen = params.head_num * (params.acc_q_len / batch_beam);
         // Paged generation FMHA: size from cache capacity; live KV bound is kvSeqLenPtr.
-        fmhaParams.kvSeqLen = generation_params.max_attention_window_size;
+        fmhaParams.kvSeqLen = isCapturing(stream) ? generation_params.max_attention_window_size
+                                                  : generation_params.max_past_kv_length;
         // Disable sliding window attention when it is not needed.
         fmhaParams.slidingWindowSize = generation_params.cyclic_attention_window_size;
         fmhaParams.totalQSeqLen = batch_beam * fmhaParams.qSeqLen;
