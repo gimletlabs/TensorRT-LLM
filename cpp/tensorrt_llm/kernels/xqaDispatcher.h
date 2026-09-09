@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -96,6 +96,12 @@ public:
     size_t getWorkspaceSize(int max_num_tokens);
 
     bool shouldUse(XQAParams const& params);
+
+    // trtllm-gen FMHA (SM >= 100). Decoder XQA still bakes history_length into the grid.
+    bool usesTllmGen() const
+    {
+        return mUseTllmGen;
+    }
 
 private:
     // The fixed XQA parameters.

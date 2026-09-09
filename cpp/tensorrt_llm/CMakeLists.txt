@@ -246,6 +246,10 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_library(${SHARED_TARGET} SHARED)
 
+# Export the CUDA-graph capture safety API.
+target_sources(${SHARED_TARGET}
+               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/gimletKernelExports.cpp)
+
 set_target_properties(
   ${SHARED_TARGET}
   PROPERTIES CXX_STANDARD "20" CXX_STANDARD_REQUIRED "YES" CXX_EXTENSIONS "NO"
