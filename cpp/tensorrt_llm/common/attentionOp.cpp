@@ -36,7 +36,9 @@
 #include "tensorrt_llm/runtime/utils/mpiUtils.h"
 #include <algorithm>
 #include <cstdint>
+#include <cuda_runtime_api.h>
 #include <limits>
+#include <type_traits>
 
 using namespace tensorrt_llm::kernels;
 namespace tc = tensorrt_llm::common;
@@ -47,6 +49,35 @@ using tensorrt_llm::common::op::AttentionOp;
 using tensorrt_llm::common::op::AttentionWorkspaceManager;
 using tensorrt_llm::common::op::AttentionXqaWorkspaceSizes;
 using tensorrt_llm::common::op::KvCacheBuffers;
+using tensorrt_llm::common::op::markCudaGraphGenerationUnsafeIfCapturing;
+
+namespace tensorrt_llm::common::op
+{
+
+namespace
+{
+thread_local bool gCudaGraphGenerationUnsafe = false;
+} // namespace
+
+void resetCudaGraphGenerationUnsafeFlag()
+{
+    gCudaGraphGenerationUnsafe = false;
+}
+
+bool cudaGraphGenerationUnsafeFlag()
+{
+    return gCudaGraphGenerationUnsafe;
+}
+
+void markCudaGraphGenerationUnsafeIfCapturing(cudaStream_t stream)
+{
+    if (isCapturing(stream))
+    {
+        gCudaGraphGenerationUnsafe = true;
+    }
+}
+
+} // namespace tensorrt_llm::common::op
 
 template <typename T>
 struct SATypeConverter
@@ -1197,7 +1228,10 @@ int AttentionOp::mlaGeneration(
         tllmRunnerParams.mMaxSeqLenCacheKv = generation_params.max_attention_window_size;
         // This should be set to numDraftTokens + 1.
         tllmRunnerParams.mMaxSeqLenQ = params.acc_q_len / batch_beam;
-        tllmRunnerParams.mMaxSeqLenKv = generation_params.max_past_kv_length;
+        // mlaGeneration always uses QkvLayout::PagedKv, so TMA/grid can be sized from cache
+        // capacity. Live bounds come from seqLensKvPtr.
+        tllmRunnerParams.mMaxSeqLenKv
+            = isCapturing(stream) ? generation_params.max_attention_window_size : generation_params.max_past_kv_length;
         tllmRunnerParams.mJITWarmup = generation_params.trtllm_gen_jit_warmup;
         tllmRunnerParams.mJITWarmupMaxNumRequests = mMaxNumRequests;
         tllmRunnerParams.mJITWarmupMaxSeqLenQ = mMaxContextLength;
@@ -1421,6 +1455,10 @@ int AttentionOp::mlaGeneration(
             if (mEnableXQA && mXqaDispatcher->shouldUse(xqaParams))
             {
                 TLLM_LOG_DEBUG("XQA kernels are selected in the generation phase.");
+                if (!mXqaDispatcher->usesTllmGen() || (xqaParams.is_spec_dec_tree && xqaParams.multi_query_tokens))
+                {
+                    markCudaGraphGenerationUnsafeIfCapturing(stream);
+                }
                 xqaParams.stream = stream;
                 mXqaDispatcher->run(xqaParams, kv_cache_buffer, kv_scale_cache_buffer);
                 return 0;
@@ -1432,7 +1470,9 @@ int AttentionOp::mlaGeneration(
         fmhaParams.b = batch_beam;
         fmhaParams.numGroupedHeads = params.head_num;
         fmhaParams.qSeqLen = params.head_num * (params.acc_q_len / batch_beam);
-        fmhaParams.kvSeqLen = generation_params.max_past_kv_length;
+        // Paged generation FMHA: size from cache capacity; live KV bound is kvSeqLenPtr.
+        fmhaParams.kvSeqLen
+            = isCapturing(stream) ? generation_params.max_attention_window_size : generation_params.max_past_kv_length;
         // Disable sliding window attention when it is not needed.
         fmhaParams.slidingWindowSize = generation_params.cyclic_attention_window_size;
         fmhaParams.totalQSeqLen = batch_beam * fmhaParams.qSeqLen;
@@ -2246,15 +2286,15 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
             // Attn_weight[b, h*s_q, s_k] = Q[b, h*s_q, d] * K'[b, d, s_k]
             // Attn_weight'[b, s_k, h*s_q] = K[b, s_k, d] * Q'[b, d, h*s_q]
             mCublasWrapper->stridedBatchedGemm(CUBLAS_OP_T, CUBLAS_OP_N,
-                attention_seq_len_2,                                   // n
-                attention_seq_len_1 * mNumHeads,                       // m
-                getHeadSize(),                                         // k
+                attention_seq_len_2,             // n
+                attention_seq_len_1 * mNumHeads, // m
+                getHeadSize(),                   // k
                 qk_scale_gemm, workspaceViews.kBuf, gemm_data_type,
-                getHeadSize(),                                         // k
-                attention_seq_len_2 * getHeadSize(),                   // n * k
+                getHeadSize(),                       // k
+                attention_seq_len_2 * getHeadSize(), // n * k
                 workspaceViews.qBuf, gemm_data_type,
-                getHeadSize(),                                         // k
-                attention_seq_len_1 * mNumHeads * getHeadSize(),       // m * k
+                getHeadSize(),                                   // k
+                attention_seq_len_1 * mNumHeads * getHeadSize(), // m * k
                 0.0f, gemm_out_buf_, gemm_out_data_type,
                 attention_seq_len_2,                                   // n
                 attention_seq_len_1 * mNumHeads * attention_seq_len_2, // m * n
@@ -2266,9 +2306,9 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
             // Attn_weight[b*h, s_q, s_k] = Q[b*h, s_q, d] * K'[b*h, d, s_k]
             // Attn_weight'[b*h, s_k, s_q] = K[b*h, s_k, d] * Q'[b*h, d, s_q]
             mCublasWrapper->stridedBatchedGemm(CUBLAS_OP_T, CUBLAS_OP_N,
-                attention_seq_len_2,                 // n
-                attention_seq_len_1,                 // m
-                getHeadSize(),                       // k
+                attention_seq_len_2, // n
+                attention_seq_len_1, // m
+                getHeadSize(),       // k
                 qk_scale_gemm, workspaceViews.kBuf, gemm_data_type,
                 getHeadSize(),                       // k
                 attention_seq_len_2 * getHeadSize(), // n * k
@@ -2276,9 +2316,9 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
                 getHeadSize(),                       // k
                 attention_seq_len_1 * getHeadSize(), // m * k
                 0.0f, gemm_out_buf_, gemm_out_data_type,
-                attention_seq_len_2,                 // n
+                attention_seq_len_2, // n
                 attention_seq_len_2 * attention_seq_len_1,
-                params.batch_size * mNumHeads,       // global batch size
+                params.batch_size * mNumHeads, // global batch size
                 CUDA_R_32F);
         }
         else // GQA
@@ -2296,15 +2336,15 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
                 void* qkptr = is_qk_buf_float_ ? static_cast<void*>(workspaceViews.qkFloatBuf + qk_offset)
                                                : static_cast<void*>(workspaceViews.qkBuf + qk_offset);
                 mCublasWrapper->stridedBatchedGemm(CUBLAS_OP_T, CUBLAS_OP_N,
-                    attention_seq_len_2,                                   // n
-                    attention_seq_len_1 * num_qheads_per_kv_head,          // m
-                    getHeadSize(),                                         // k
+                    attention_seq_len_2,                          // n
+                    attention_seq_len_1 * num_qheads_per_kv_head, // m
+                    getHeadSize(),                                // k
                     qk_scale_gemm, kptr, gemm_data_type,
-                    getHeadSize(),                                         // k
-                    mNumKVHeads * attention_seq_len_2 * getHeadSize(),     // n * k
+                    getHeadSize(),                                     // k
+                    mNumKVHeads * attention_seq_len_2 * getHeadSize(), // n * k
                     qptr, gemm_data_type,
-                    getHeadSize(),                                         // k
-                    attention_seq_len_1 * mNumHeads * getHeadSize(),       // m * k
+                    getHeadSize(),                                   // k
+                    attention_seq_len_1 * mNumHeads * getHeadSize(), // m * k
                     0.0f, qkptr, gemm_out_data_type,
                     attention_seq_len_2,                                   // n
                     attention_seq_len_1 * mNumHeads * attention_seq_len_2, // m * n
@@ -2386,19 +2426,19 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
             // O[b, h*s_q, d] = Attn_weight[b, h*s_q, s_k] * V[b, s_k, d]
             // O'[b, d, h*s_q] = V'[b, d, s_k] * Attn_weight'[b, s_k, h*s_q]
             mCublasWrapper->stridedBatchedGemm(CUBLAS_OP_N, CUBLAS_OP_N,
-                getHeadSize(),                                         // n
-                mNumHeads * attention_seq_len_1,                       // m
-                attention_seq_len_2,                                   // k
+                getHeadSize(),                   // n
+                mNumHeads * attention_seq_len_1, // m
+                attention_seq_len_2,             // k
                 workspaceViews.vBuf,
-                getHeadSize(),                                         // n
-                getHeadSize() * attention_seq_len_2,                   // n * k
+                getHeadSize(),                       // n
+                getHeadSize() * attention_seq_len_2, // n * k
                 workspaceViews.qkBuf,
                 attention_seq_len_2,                                   // k
                 attention_seq_len_2 * mNumHeads * attention_seq_len_1, // m * k
                 workspaceViews.qkvBuf,
-                getHeadSize(),                                         // n
-                getHeadSize() * mNumHeads * attention_seq_len_1,       // n * m
-                params.batch_size                                      // global batch size
+                getHeadSize(),                                   // n
+                getHeadSize() * mNumHeads * attention_seq_len_1, // n * m
+                params.batch_size                                // global batch size
             );
         }
         else if (mNumKVHeads == mNumHeads) // MHA
@@ -2424,19 +2464,19 @@ int AttentionOp::enqueueContext(EnqueueContextParams<T> const& params, cudaStrea
                 T* vptr = workspaceViews.vBuf + (ki * attention_seq_len_2 * getHeadSize());
                 T* qkvptr = workspaceViews.qkvBuf + (ki * attention_seq_len_1 * num_qheads_per_kv_head * getHeadSize());
                 mCublasWrapper->stridedBatchedGemm(CUBLAS_OP_N, CUBLAS_OP_N,
-                    getHeadSize(),                                         // n
-                    num_qheads_per_kv_head * attention_seq_len_1,          // m
-                    attention_seq_len_2,                                   // k
+                    getHeadSize(),                                // n
+                    num_qheads_per_kv_head * attention_seq_len_1, // m
+                    attention_seq_len_2,                          // k
                     vptr,
-                    getHeadSize(),                                         // n
-                    mNumKVHeads * getHeadSize() * attention_seq_len_2,     // n * k
+                    getHeadSize(),                                     // n
+                    mNumKVHeads * getHeadSize() * attention_seq_len_2, // n * k
                     qkptr,
                     attention_seq_len_2,                                   // k
                     attention_seq_len_2 * mNumHeads * attention_seq_len_1, // m * k
                     qkvptr,
-                    getHeadSize(),                                         // n
-                    getHeadSize() * mNumHeads * attention_seq_len_1,       // n * m
-                    params.batch_size                                      // global batch size
+                    getHeadSize(),                                   // n
+                    getHeadSize() * mNumHeads * attention_seq_len_1, // n * m
+                    params.batch_size                                // global batch size
                 );
             }
         }
@@ -2580,6 +2620,17 @@ int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cud
         if (mEnableXQA && mXqaDispatcher->shouldUse(xqaParams))
         {
             TLLM_LOG_DEBUG("XQA kernels are selected in the generation phase.");
+            // Decoder XQA and contiguous-KV XQA bake host past-KV length into the
+            // captured launch. PagedKv + trtllm-gen is replay-safe after sizing
+            // mMaxSeqLenKv from cache capacity.
+            if constexpr (std::is_same_v<KVCacheBuffer, KVLinearBuffer>)
+            {
+                markCudaGraphGenerationUnsafeIfCapturing(stream);
+            }
+            else if (!mXqaDispatcher->usesTllmGen() || (xqaParams.is_spec_dec_tree && xqaParams.multi_query_tokens))
+            {
+                markCudaGraphGenerationUnsafeIfCapturing(stream);
+            }
             xqaParams.stream = stream;
             if (mCpSize > 1)
             {
@@ -2615,9 +2666,40 @@ int AttentionOp::enqueueGeneration(EnqueueGenerationParams<T> const& params, cud
         }
     }
 
-    // This is the number of kv tokens that q needs to visit, but excluding one as it will be processed before the kv
-    // loop.
+    // This is the number of kv tokens that q needs to visit, but excluding one as it will be
+    // processed before the kv loop.
     int timestep = params.max_past_kv_length;
+
+    // CUDA-graph safety. A captured launch is replayed at later decode positions, so a launch
+    // parameter derived from *this* step's KV length is stale on replay. `timestep` has three uses
+    // here: invokeShiftKCache (pos-shift only), cross-attention (not reached), and the shared-memory
+    // stride, both via max_timesteps = min(timestep, cyclic_attention_window_size) below and via
+    // params.timestep, which the MMHA kernel uses to size that same stride. The real per-sequence
+    // work comes from the device sequence lengths, which the kernel receives as length_per_sample.
+    //
+    // So for a window-bounded launch, min(timestep, window) is already the window whenever
+    // timestep >= window: pinning timestep to the window changes no sizing, and makes the value
+    // recorded in the launch constant across decode steps rather than tracking the live KV length.
+    //
+    // Restricted to a genuine sliding window. When the layer attends to the whole cache the window
+    // is the cache capacity, and pinning would size shared memory for the full window on the very
+    // first token, which can exceed the per-block limit and force multi-block mode. Skipped under
+    // pos-shift, where timestep drives invokeShiftKCache as a real count, not a sizing hint.
+    //
+    // Necessary but not sufficient for replay: the captured graph also bakes H2D memcpy extents and
+    // grid dimensions that follow the live batch, so the caller must still recapture when those
+    // change. GEM does that with a layout signature in atc/plugin/tensorrt/cuda_graph.cc.
+    bool const window_bounds_launch = params.sequence_lengths != nullptr && !mPosShiftEnabled && !isCrossAttention()
+        && params.cyclic_attention_window_size < params.max_attention_window_size;
+    if (window_bounds_launch)
+    {
+        timestep = params.cyclic_attention_window_size;
+    }
+    else
+    {
+        // Not window-bounded: timestep is this step's live KV length and the launch bakes it.
+        markCudaGraphGenerationUnsafeIfCapturing(stream);
+    }
     int const max_timesteps = std::min(timestep, params.cyclic_attention_window_size);
     int estimated_min_multi_block_count
         = estimate_min_multi_block_count(max_timesteps, mMaxSharedMemoryPerBlockOptin - 2048, sizeof(T));

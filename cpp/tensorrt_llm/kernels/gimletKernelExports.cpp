@@ -26,9 +26,11 @@
 // Taking each instantiation's address is enough to pull its object out of the archive. Keep this
 // list minimal: every entry grows the shared library.
 
+#include "tensorrt_llm/common/attentionOp.h"
 #include "tensorrt_llm/kernels/moe/communication/moeAlltoAllKernels.h"
 #include "tensorrt_llm/kernels/moe/routing/customMoeRoutingKernels.h"
 #include "tensorrt_llm/kernels/quantization.h"
+#include "tensorrt_llm/plugins/api/tllmPlugin.h"
 
 #include <cuda_fp16.h>
 #ifdef ENABLE_BF16
@@ -90,3 +92,13 @@ void const* gimletKernelExportAnchors[] = {
 };
 
 } // namespace tensorrt_llm::kernels
+
+extern "C" void tllmResetCudaGraphGenerationUnsafeFlag()
+{
+    tensorrt_llm::common::op::resetCudaGraphGenerationUnsafeFlag();
+}
+
+extern "C" bool tllmCudaGraphGenerationUnsafeFlag()
+{
+    return tensorrt_llm::common::op::cudaGraphGenerationUnsafeFlag();
+}
