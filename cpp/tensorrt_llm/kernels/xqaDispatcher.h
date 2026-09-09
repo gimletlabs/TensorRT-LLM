@@ -93,6 +93,9 @@ public:
 
     bool shouldUse(XQAParams const& params);
 
+    // trtllm-gen FMHA (SM >= 100). Decoder XQA still bakes history_length into the grid.
+    bool usesTllmGen() const { return mUseTllmGen; }
+
 private:
     // The fixed XQA parameters.
     XqaFixedParams mFixedParams;

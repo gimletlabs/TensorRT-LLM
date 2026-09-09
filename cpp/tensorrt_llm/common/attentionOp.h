@@ -42,6 +42,13 @@ TRTLLM_NAMESPACE_BEGIN
 namespace common::op
 {
 
+// GEM queries these after CUDA-graph capture. MMHA and contiguous-KV / decoder-XQA
+// bake host past-KV length into the launch; PagedKv + trtllm-gen does not after
+// sizing mMaxSeqLenKv from cache capacity.
+void resetCudaGraphGenerationUnsafeFlag();
+bool cudaGraphGenerationUnsafeFlag();
+void markCudaGraphGenerationUnsafeIfCapturing(cudaStream_t stream);
+
 class AttentionOp
 {
 public:

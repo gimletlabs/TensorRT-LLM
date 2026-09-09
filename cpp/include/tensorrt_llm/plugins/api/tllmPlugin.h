@@ -71,4 +71,9 @@ extern "C"
     [[maybe_unused]] void setLoggerFinder([[maybe_unused]] nvinfer1::ILoggerFinder* finder);
     [[maybe_unused]] nvinfer1::v_1_0::IPluginCreator* const* getPluginCreators(std::int32_t& nbCreators);
     [[maybe_unused]] nvinfer1::v_1_0::IPluginCreatorInterface* const* getCreators(std::int32_t& nbCreators);
+
+    // CUDA-graph capture safety. GEM resets before BeginCapture and queries after EndCapture.
+    // True if any generation kernel in the captured enqueue baked host past-KV length.
+    void tllmResetCudaGraphGenerationUnsafeFlag();
+    bool tllmCudaGraphGenerationUnsafeFlag();
 }
