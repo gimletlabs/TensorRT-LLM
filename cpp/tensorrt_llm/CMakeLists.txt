@@ -247,6 +247,11 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_library(${SHARED_TARGET} SHARED)
 
+# Pulls kernel objects that only the torch ops reference out of kernels_src, so embedders can call
+# them without linking libtorch. See the file for details.
+target_sources(${SHARED_TARGET}
+               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/gimletKernelExports.cpp)
+
 set_target_properties(
   ${SHARED_TARGET}
   PROPERTIES CXX_STANDARD "17" CXX_STANDARD_REQUIRED "YES" CXX_EXTENSIONS "NO"
