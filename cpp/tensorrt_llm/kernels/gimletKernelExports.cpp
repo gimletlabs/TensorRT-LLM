@@ -26,8 +26,8 @@
 // Taking each instantiation's address is enough to pull its object out of the archive. Keep this
 // list minimal: every entry grows the shared library.
 
-#include "tensorrt_llm/kernels/communicationKernels/moeAlltoAllKernels.h"
-#include "tensorrt_llm/kernels/customMoeRoutingKernels.h"
+#include "tensorrt_llm/kernels/moe/communication/moeAlltoAllKernels.h"
+#include "tensorrt_llm/kernels/moe/routing/customMoeRoutingKernels.h"
 #include "tensorrt_llm/kernels/quantization.h"
 
 #include <cuda_fp16.h>

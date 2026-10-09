@@ -320,6 +320,7 @@ extern torch::Tensor& fp8_block_scaling_gemm_out(torch::Tensor const& mat1, torc
     auto const sm = tensorrt_llm::common::getSMVersion();
     switch (sm)
     {
+    case 107:
     case 103: return fp8_block_scale_gemm_blackwell_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
     case 100: return fp8_block_scale_gemm_blackwell_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
     case 90: return fp8_block_scaling_gemm_hopper_out(mat1, mat2, mat1Scale, mat2Scale, workspace, out);
@@ -335,6 +336,7 @@ extern int64_t fp8_block_scaling_gemm_workspace_size(int32_t m, int32_t n, int32
     auto const sm = tensorrt_llm::common::getSMVersion();
     switch (sm)
     {
+    case 107:
     case 103:
     case 100:
     {

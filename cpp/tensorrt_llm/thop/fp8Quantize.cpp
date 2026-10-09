@@ -263,8 +263,11 @@ std::tuple<at::Tensor, at::Tensor> fp8_batched_quantize_1x128_permute102(at::Ten
     // Call the _out version
     fp8_batched_quantize_1x128_permute102_out(self, quantized_tensor, scale_tensor);
 
-    // Return the appropriately sliced tensors
-    return {quantized_tensor.slice(0, 0, b * m * n).view({b, m, n}), scale_tensor};
+    auto const num_n_blocks = (n + 127) / 128;
+    auto const act_scal_elesize = b * num_n_blocks * m_padded;
+    TORCH_CHECK(act_scal_elesize <= scale_tensor.numel(), "Scale tensor size mismatch");
+    auto scales = scale_tensor.view({-1}).slice(0, 0, act_scal_elesize).view({b, num_n_blocks, m_padded}).contiguous();
+    return {quantized_tensor.slice(0, 0, b * m * n).view({b, m, n}), scales};
 }
 
 // Fused 1x128 FP8 quantize + UE8M0 packing (SM100 family only: SM100/SM103/SM107).

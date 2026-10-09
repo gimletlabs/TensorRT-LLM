@@ -154,7 +154,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /src/tensorrt_llm
 COPY cpp cpp
-COPY benchmarks benchmarks
 COPY docker docker
 COPY scripts scripts
 COPY tensorrt_llm tensorrt_llm
@@ -175,7 +174,10 @@ RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACH
 
 COPY cpp cpp
 RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=${CCACHE_DIR} --mount=type=cache,target=${BUILD_DIR} \
-    GITHUB_MIRROR=$GITHUB_MIRROR python3 ${BUILD_WHEEL_SCRIPT} ${BUILD_WHEEL_ARGS}
+    --mount=type=secret,id=github_clone_token \
+    . docker/common/github_auth.sh && \
+    TRTLLM_BUILD_SOURCE_COMMIT=${GIT_COMMIT} \
+    GITHUB_MIRROR=${GITHUB_MIRROR} python3 ${BUILD_WHEEL_SCRIPT} ${BUILD_WHEEL_ARGS}
 
 # HACK; build_dir is cached which also means it is not available after this step.
 # We copy it over to a new directory that is not cached, then move it back to the build directory

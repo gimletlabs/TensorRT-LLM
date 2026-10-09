@@ -810,8 +810,9 @@ public:
         int64_t num_experts, int64_t top_k, std::optional<int64_t> const n_group,
         std::optional<int64_t> const topk_group, std::optional<int64_t> const output_hidden_size,
         int64_t local_expert_offset, int64_t local_num_experts, std::optional<double> routed_scaling_factor,
-        std::vector<int64_t> tile_config_pair) const
+        std::vector<int64_t> tile_config_pair)
     {
+        TORCH_CHECK(tile_config_pair.size() == 2, "tile_config_pair must contain tileN and config");
         int64_t actual_output_hidden_size = output_hidden_size.value_or(hidden_size);
 
         // tile_config_pair corresponds to pair (tileN, config)
@@ -823,14 +824,48 @@ public:
             float const avg_tokens_per_expert = static_cast<float>(num_tokens * top_k) / local_num_experts;
             tileN = std::clamp(nextPowerOfTwo(avg_tokens_per_expert), mSupportedTileN.front(), mSupportedTileN.back());
 
-            config = mRunners.at(tileN)->getDefaultValidConfigIndex(top_k, hidden_size, intermediate_size,
-                local_num_experts, num_tokens, output_hidden_size.value_or(hidden_size), intermediate_size);
+            config = getRunner(tileN, /* useFineGrained */ false)
+                         .getDefaultValidConfigIndex(top_k, hidden_size, intermediate_size, local_num_experts,
+                             num_tokens, output_hidden_size.value_or(hidden_size), intermediate_size);
+        }
+
+        // Prefer the fine-grained runner for the tuned tile when it has a valid config for this shape.
+        RunnerType* runner = nullptr;
+        int64_t configToRun = config;
+        if (tensorrt_llm::common::getEnvUseFineGrainedSync())
+        {
+            auto* fineGrainedRunner = getRunnerOrNull(tileN, /* useFineGrained */ true);
+            if (fineGrainedRunner != nullptr)
+            {
+                try
+                {
+                    configToRun = fineGrainedRunner->getDefaultValidConfigIndex(top_k, hidden_size, intermediate_size,
+                        local_num_experts, num_tokens, actual_output_hidden_size, intermediate_size);
+                    runner = fineGrainedRunner;
+                }
+                catch (std::exception const&)
+                {
+                    runner = nullptr;
+                }
+            }
+        }
+        if (runner == nullptr)
+        {
+            runner = &getRunner(tileN, /* useFineGrained */ false);
+            configToRun = config;
         }
 
         // Calculate max_num_padded_tokens
         int32_t max_num_padded_tokens
             = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxPermutedPaddedCount(
                 num_tokens, top_k, num_experts, tileN);
+
+        int32_t const max_num_padded_tokens_gemm1
+            = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::maybeGetMinTokenCount(
+                max_num_padded_tokens, intermediate_size, btg::dtypeGetNumBits(mDtypeAct));
+        int32_t const max_num_padded_tokens_gemm2
+            = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::maybeGetMinTokenCount(
+                max_num_padded_tokens, hidden_size, btg::dtypeGetNumBits(btg::Dtype::Bfloat16));
 
         // Calculate max_num_ctas
         int32_t max_num_ctas = tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getMaxNumCtasInBatchDim(
@@ -852,7 +887,7 @@ public:
         args.intermediate_size = intermediate_size;
 
         // Get workspace sizes from the selected runner
-        auto workspace_sizes = mRunners.at(tileN)->getWorkspaceSizeInBytes(args, config);
+        auto workspace_sizes = runner->getWorkspaceSizeInBytes(args, configToRun);
         size_t workspace_fc1_size = std::get<0>(workspace_sizes);
         size_t workspace_fc2_size = std::get<1>(workspace_sizes);
 
@@ -879,7 +914,10 @@ public:
         total_size += align_size(expanded_idx_size);
 
         // permuted_idx_to_token_idx: {max_num_padded_tokens} Int
-        size_t permuted_idx_size = static_cast<size_t>(max_num_padded_tokens) * sizeof(int32_t);
+        size_t permuted_idx_size
+            = static_cast<size_t>(tensorrt_llm::kernels::trtllmGenFp8BlockScaleMoe::Routing::getRouteMapAllocCount(
+                  max_num_padded_tokens))
+            * sizeof(int32_t);
         total_size += align_size(permuted_idx_size);
 
         // expert_weights: {num_tokens, top_k} BFloat16 (always allocated, even if topk_weights provided)
@@ -899,21 +937,21 @@ public:
         // Type depends on dtype: BFloat16 (2 bytes) or Float8_e4m3fn (1 byte)
         size_t gemm1_output_element_size = (mDtypeAct == btg::Dtype::Bfloat16) ? sizeof(int16_t) : sizeof(int8_t);
         size_t gemm1_output_size
-            = static_cast<size_t>(max_num_padded_tokens * intermediate_size) * gemm1_output_element_size;
+            = static_cast<size_t>(max_num_padded_tokens_gemm1 * intermediate_size) * gemm1_output_element_size;
         total_size += align_size(gemm1_output_size);
 
         // gemm1_output_scale: {sf_size} UInt8 (only if dtype == MxE4m3)
         if (mDtypeAct == btg::Dtype::MxE4m3)
         {
             int32_t const sf_block_size = 32;
-            int64_t sf_size
-                = tensorrt_llm::computeSwizzledLayoutSFSize(max_num_padded_tokens, intermediate_size / sf_block_size);
+            int64_t sf_size = tensorrt_llm::computeSwizzledLayoutSFSize(
+                max_num_padded_tokens_gemm1, intermediate_size / sf_block_size);
             size_t gemm1_output_scale_size = static_cast<size_t>(sf_size) * sizeof(uint8_t);
             total_size += align_size(gemm1_output_scale_size);
         }
 
         // gemm2_output: {max_num_padded_tokens, hidden_size} BFloat16
-        size_t gemm2_output_size = static_cast<size_t>(max_num_padded_tokens * hidden_size) * sizeof(int16_t);
+        size_t gemm2_output_size = static_cast<size_t>(max_num_padded_tokens_gemm2 * hidden_size) * sizeof(int16_t);
         total_size += align_size(gemm2_output_size);
 
         // cta_idx_xy_to_batch_idx: {max_num_ctas} Int
