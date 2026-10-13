@@ -27,6 +27,7 @@
 // list minimal: every entry grows the shared library.
 
 #include "tensorrt_llm/common/attentionOp.h"
+#include "tensorrt_llm/kernels/causalConv1d/causalConv1d.h"
 #include "tensorrt_llm/kernels/moe/communication/moeAlltoAllKernels.h"
 #include "tensorrt_llm/kernels/moe/routing/customMoeRoutingKernels.h"
 #include "tensorrt_llm/kernels/quantization.h"
@@ -81,6 +82,8 @@ void const* gimletKernelExportAnchors[] = {
     customMoeRoutingAnchorNoSoftmax<float, float>(),
     mxFp8QuantizationAnchor<half>(),
 #ifdef ENABLE_BF16
+    reinterpret_cast<void const*>(&causal_conv1d::causal_conv1d_fwd_cuda<__nv_bfloat16, __nv_bfloat16>),
+    reinterpret_cast<void const*>(&causal_conv1d::causal_conv1d_update_cuda<__nv_bfloat16, __nv_bfloat16>),
     customMoeRoutingAnchor<float, __nv_bfloat16>(),
     customMoeRoutingAnchor<__nv_bfloat16, float>(),
     customMoeRoutingAnchor<__nv_bfloat16, __nv_bfloat16>(),
