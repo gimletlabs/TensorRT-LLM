@@ -279,9 +279,10 @@ bool XqaDispatcher::isSupported()
         TllmGenFmhaRunnerParams tllmRunnerParams;
         memset(&tllmRunnerParams, 0, sizeof(tllmRunnerParams));
         tllmRunnerParams.mQkvLayout = mFixedParams.isPagedKv ? QkvLayout::PagedKv : QkvLayout::ContiguousKv;
+        bool const isSpecDecTree = mFixedParams.isSpecDecoding && mFixedParams.isSpecDecTree;
         tllmRunnerParams.mMaskType
-            = mFixedParams.isSpecDecoding ? TrtllmGenAttentionMaskType::Custom : TrtllmGenAttentionMaskType::Causal;
-        tllmRunnerParams.mIsSpecDecTree = mFixedParams.isSpecDecoding;
+            = isSpecDecTree ? TrtllmGenAttentionMaskType::Custom : TrtllmGenAttentionMaskType::Causal;
+        tllmRunnerParams.mIsSpecDecTree = isSpecDecTree;
         tllmRunnerParams.mKernelType = FmhaKernelType::Generation;
         tllmRunnerParams.mTileScheduler = TileScheduler::Static;
         tllmRunnerParams.mMultiCtasKvMode = true;

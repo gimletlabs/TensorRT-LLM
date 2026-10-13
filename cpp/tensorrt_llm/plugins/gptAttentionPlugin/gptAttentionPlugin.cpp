@@ -1373,6 +1373,12 @@ IPluginV2* GPTAttentionPluginCreator::createPlugin(char const* name, PluginField
             static_cast<int32_t>(p.getScalar<int32_t>("cp_size").value()),
             static_cast<int32_t>(p.getScalar<int32_t>("cp_rank").value()),
             static_cast<std::set<int32_t>>(p.getSet<int32_t>("cp_group").value()));
+        // A linear chain of drafts needs no tree mask: its generation tokens attend causally, which
+        // trtllm-gen supports for more head sizes than tree masks and without per-layer mask setup.
+        if (auto is_tree = p.getScalar<int32_t>("spec_decoding_is_tree"))
+        {
+            obj->mIsSpecDecTree = static_cast<bool>(*is_tree);
+        }
         obj->setPluginNamespace(mNamespace.c_str());
         return obj;
     }
