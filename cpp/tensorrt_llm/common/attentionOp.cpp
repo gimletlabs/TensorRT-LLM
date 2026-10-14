@@ -3038,6 +3038,7 @@ int AttentionOp::initialize() noexcept
         fixedParams.numTokensPerBlock = mTokensPerBlock;
         fixedParams.headSize = mHeadSize;
         fixedParams.qScaling = mQScaling;
+        fixedParams.isSpecDecTree = mIsSpecDecTree;
         fixedParams.multiBlockMode = mMultiBlockMode;
         fixedParams.isPagedKv = mPagedKVCache;
         fixedParams.isSpecDecoding = mIsSpecDecodingEnabled;

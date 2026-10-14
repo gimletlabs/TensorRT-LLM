@@ -164,6 +164,7 @@ GPTAttentionPluginCommon::GPTAttentionPluginCommon(void const* data, size_t leng
     read(d, mUseSpecDecoding);
     read(d, mSpecDecodingIsGenerationLengthVariable);
     read(d, mSpecDecodingMaxGenerationLength);
+    read(d, mIsSpecDecTree);
     read(d, mIsMLAEnabled);
     read(d, mMLAParams);
     read(d, mNbMultiBlockSemaphores);
@@ -221,7 +222,8 @@ size_t GPTAttentionPluginCommon::getCommonSerializationSize() const noexcept
         + sizeof(mPagedContextFMHA) + sizeof(mFP8ContextFMHA) + sizeof(mFP8AttenOutput) + sizeof(mHasFullAttentionMask)
         + sizeof(mUseKVCache) + sizeof(mUnfuseQkvGemm) + sizeof(mUseLognScaling) + sizeof(mUseAttentionSinks)
         + sizeof(mIsSpecDecodingEnabled) + sizeof(mUseSpecDecoding) + sizeof(mSpecDecodingIsGenerationLengthVariable)
-        + sizeof(mSpecDecodingMaxGenerationLength) + sizeof(mNbMultiBlockSemaphores) + sizeof(mIsMLAEnabled)
+        + sizeof(mSpecDecodingMaxGenerationLength) + sizeof(mIsSpecDecTree) + sizeof(mNbMultiBlockSemaphores)
+        + sizeof(mIsMLAEnabled)
         + sizeof(mMLAParams) + sizeof(mFuseFp4Quant) + sizeof(mSkipAttn)
         + sizeof(uint32_t) // size of DecoderXQARunnerResource buffer.
         + sizeof(mCpSize) + sizeof(mCpRank) + sizeof(int32_t) * mCpGroup.size() + mResource->getSerializationSize();
@@ -280,6 +282,7 @@ void GPTAttentionPluginCommon::serializeCommon(void* buffer) const noexcept
     write(d, mUseSpecDecoding);
     write(d, mSpecDecodingIsGenerationLengthVariable);
     write(d, mSpecDecodingMaxGenerationLength);
+    write(d, mIsSpecDecTree);
     write(d, mIsMLAEnabled);
     write(d, mMLAParams);
     write(d, mNbMultiBlockSemaphores);
@@ -364,6 +367,8 @@ GPTAttentionPluginCreatorCommon::GPTAttentionPluginCreatorCommon()
         PluginField("spec_decoding_is_generation_length_variable", nullptr, PluginFieldType::kINT8));
     mPluginAttributes.emplace_back(
         PluginField("spec_decoding_max_generation_length", nullptr, PluginFieldType::kINT32));
+    // Optional; 1 (tree) when absent. 0 verifies a linear chain of drafts with the causal mask.
+    mPluginAttributes.emplace_back(PluginField("spec_decoding_is_tree", nullptr, PluginFieldType::kINT8));
     mPluginAttributes.emplace_back(PluginField("is_mla_enabled", nullptr, PluginFieldType::kINT8));
     mPluginAttributes.emplace_back(PluginField("q_lora_rank", nullptr, PluginFieldType::kINT32));
     mPluginAttributes.emplace_back(PluginField("kv_lora_rank", nullptr, PluginFieldType::kINT32));

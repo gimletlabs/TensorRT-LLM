@@ -61,6 +61,9 @@ struct XqaFixedParams
     bool isPagedKv;
     // Is speculative decoding enabled.
     bool isSpecDecoding;
+    // Whether speculative decoding verifies a tree of drafts (custom mask) rather than a linear chain
+    // (causal mask).
+    bool isSpecDecTree = true;
     // Do we apply alibi ?
     bool hasAlibi;
 };
