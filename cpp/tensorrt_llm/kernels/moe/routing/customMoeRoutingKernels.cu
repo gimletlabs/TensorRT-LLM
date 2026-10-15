@@ -194,7 +194,9 @@ __global__ void __launch_bounds__(pickBlockSize<MaxNumExperts>(), 1) customMoeRo
 #endif
 }
 
-int nextPowerOfTwo(int num)
+// Internal linkage: topkLastDim.cu defines an identical helper at namespace scope, and the two
+// objects collide at link time whenever both are pulled into the same shared library.
+static int nextPowerOfTwo(int num)
 {
     if (num <= 0)
     {

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cstdlib>
+
 #include "cuda_runtime_api.h"
 #include "tensorrt_llm/common/config.h"
 #include <algorithm>
@@ -845,6 +847,25 @@ private:
         static std::string execPathStr;
         if (execPathStr.empty())
         {
+            // The pip-based discovery below only works where TensorRT-LLM is installed as a Python
+            // package. Embedders that link libtensorrt_llm.so directly and ship the JIT kernel
+            // headers themselves have no such install, so let them point at the header directory
+            // (the one holding KernelParams.h, cuda/, cutlass/ and trtllm/) explicitly. jitify2
+            // takes the parent of this path as its include root, matching the "numb" pseudo-exec
+            // path the pip branch constructs.
+            if (char const* headerDir = std::getenv("TRTLLM_GEN_FMHA_KERNEL_HEADER_DIR"))
+            {
+                if (headerDir[0] != '\0' && std::filesystem::exists(headerDir))
+                {
+                    execPathStr = (std::filesystem::path(headerDir) / "numb").string();
+                    return execPathStr;
+                }
+                TLLM_LOG_WARNING(
+                    "TRTLLM_GEN_FMHA_KERNEL_HEADER_DIR is set to '%s', which does not exist; "
+                    "falling back to locating the TensorRT-LLM Python installation.",
+                    headerDir);
+            }
+
             // Get build directory relative path from CMake macro
             // This is the relative path from project root to build directory
             std::string buildRelPath = "cpp/build/tensorrt_llm/kernels/trtllmGenKernels/fmha";
