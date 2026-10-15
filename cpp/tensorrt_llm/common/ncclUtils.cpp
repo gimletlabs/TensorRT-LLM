@@ -93,7 +93,7 @@ namespace tensorrt_llm::common::nccl_util
 namespace
 {
 
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0)
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0) && !defined(TRTLLM_GIMLET_KERNELS_ONLY)
 constexpr int kNcclWindowMinRuntimeVersion = NCCL_VERSION(2, 28, 0);
 constexpr int kNcclGb10WindowFixedVersion = NCCL_VERSION(2, 30, 4);
 constexpr int kGb10RealSmVersion = 121;
@@ -106,7 +106,7 @@ bool isGb10Platform(int realSmVersion, bool isIntegrated)
 
 bool queryNcclWindowSupported()
 {
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0)
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0) && !defined(TRTLLM_GIMLET_KERNELS_ONLY)
     int version = 0;
     if (ncclGetVersion(&version) != ncclSuccess)
     {
@@ -182,7 +182,7 @@ bool queryNcclWindowSupported()
 
 bool isNcclWindowSupportedForPlatform(int realSmVersion, bool isIntegrated, int ncclRuntimeVersion)
 {
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0)
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0) && !defined(TRTLLM_GIMLET_KERNELS_ONLY)
     if (ncclRuntimeVersion < kNcclWindowMinRuntimeVersion)
     {
         return false;
@@ -392,7 +392,7 @@ size_t NcclCommResourceManager::getResourceCount(ncclComm_t comm) const noexcept
 // NCCLWindowAllocator Implementation
 //==============================================================================
 
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0)
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0) && !defined(TRTLLM_GIMLET_KERNELS_ONLY)
 
 NCCLWindowAllocator& NCCLWindowAllocator::getInstance()
 {

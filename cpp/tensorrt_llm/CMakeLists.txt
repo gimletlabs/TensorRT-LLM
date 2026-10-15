@@ -144,28 +144,30 @@ add_subdirectory(common)
 add_subdirectory(kernels)
 add_subdirectory(runtime)
 
-set(BATCH_MANAGER_TARGET tensorrt_llm_batch_manager_static)
-set(BATCH_MANAGER_TARGET_ARCH ${TARGET_ARCH})
-add_subdirectory(batch_manager)
+if(NOT BUILD_GIMLET_KERNELS_ONLY)
+  set(BATCH_MANAGER_TARGET tensorrt_llm_batch_manager_static)
+  set(BATCH_MANAGER_TARGET_ARCH ${TARGET_ARCH})
+  add_subdirectory(batch_manager)
 
-set(EXECUTOR_TARGET tensorrt_llm_executor_static)
-set(EXECUTOR_TARGET_ARCH ${TARGET_ARCH})
-set(UCX_WRAPPER_TARGET tensorrt_llm_ucx_wrapper)
+  set(EXECUTOR_TARGET tensorrt_llm_executor_static)
+  set(EXECUTOR_TARGET_ARCH ${TARGET_ARCH})
+  set(UCX_WRAPPER_TARGET tensorrt_llm_ucx_wrapper)
 
-if(NIXL_ROOT)
-  set(NIXL_WRAPPER_TARGET tensorrt_llm_nixl_wrapper)
-  set(TRANSFER_AGENT_BINDING_TARGET tensorrt_llm_transfer_agent_binding)
+  if(NIXL_ROOT)
+    set(NIXL_WRAPPER_TARGET tensorrt_llm_nixl_wrapper)
+    set(TRANSFER_AGENT_BINDING_TARGET tensorrt_llm_transfer_agent_binding)
+  endif()
+
+  if(MOONCAKE_ROOT)
+    set(MOONCAKE_WRAPPER_TARGET tensorrt_llm_mooncake_wrapper)
+  endif()
+
+  add_subdirectory(executor)
+
+  find_package(Threads REQUIRED)
+  target_link_libraries(${BATCH_MANAGER_TARGET} INTERFACE Threads::Threads)
+  target_link_libraries(${EXECUTOR_TARGET} INTERFACE Threads::Threads)
 endif()
-
-if(MOONCAKE_ROOT)
-  set(MOONCAKE_WRAPPER_TARGET tensorrt_llm_mooncake_wrapper)
-endif()
-
-add_subdirectory(executor)
-
-find_package(Threads REQUIRED)
-target_link_libraries(${BATCH_MANAGER_TARGET} INTERFACE Threads::Threads)
-target_link_libraries(${EXECUTOR_TARGET} INTERFACE Threads::Threads)
 
 set(TRTLLM_LINK_LIBS
     ${CUDA_DRV_LIB}
@@ -246,7 +248,8 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_library(${SHARED_TARGET} SHARED)
 
-# Export the CUDA-graph capture safety API.
+# Pulls kernel objects that only the torch ops reference out of kernels_src, so embedders can call
+# them without linking libtorch. See the file for details.
 target_sources(${SHARED_TARGET}
                PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/gimletKernelExports.cpp)
 
@@ -259,18 +262,25 @@ target_link_libraries(${SHARED_TARGET} PUBLIC ${TRTLLM_LINK_LIBS})
 
 target_link_libraries(
   ${SHARED_TARGET}
-  PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,${BATCH_MANAGER_TARGET}>
-          $<LINK_LIBRARY:WHOLE_ARCHIVE,${EXECUTOR_TARGET}>
-          $<LINK_LIBRARY:WHOLE_ARCHIVE,fp8_blockscale_gemm_src>
+  PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,fp8_blockscale_gemm_src>
           $<LINK_LIBRARY:WHOLE_ARCHIVE,${INTERNAL_CUTLASS_KERNELS_TARGET}>)
 
 # Link kernel_src and cutlass_src. static internal cutlass lib overridden.
 target_link_libraries(${SHARED_TARGET} PUBLIC kernels_src cutlass_src)
 
-# Cyclic dependency of batch manager on TRT-LLM
-target_link_libraries(${BATCH_MANAGER_TARGET} INTERFACE ${SHARED_TARGET})
-# Cyclic dependency of executor on TRT-LLM
-target_link_libraries(${EXECUTOR_TARGET} INTERFACE ${SHARED_TARGET})
+if(BUILD_GIMLET_KERNELS_ONLY)
+  # The GPT attention plugin records per-layer context completion events.
+  target_sources(${SHARED_TARGET} PRIVATE batch_manager/contextProgress.cpp)
+else()
+  target_link_libraries(
+    ${SHARED_TARGET}
+    PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,${BATCH_MANAGER_TARGET}>
+            $<LINK_LIBRARY:WHOLE_ARCHIVE,${EXECUTOR_TARGET}>)
+  # Cyclic dependency of batch manager on TRT-LLM
+  target_link_libraries(${BATCH_MANAGER_TARGET} INTERFACE ${SHARED_TARGET})
+  # Cyclic dependency of executor on TRT-LLM
+  target_link_libraries(${EXECUTOR_TARGET} INTERFACE ${SHARED_TARGET})
+endif()
 
 # Cyclic dependency of UCX data transceiver on TRT-LLM
 if(TARGET ${UCX_WRAPPER_TARGET})
@@ -299,7 +309,9 @@ if(BUILD_PYT)
   add_subdirectory(thop)
 endif()
 
-add_subdirectory(nanobind)
+if(NOT BUILD_GIMLET_KERNELS_ONLY)
+  add_subdirectory(nanobind)
+endif()
 
 if(BUILD_DEEP_EP)
   add_subdirectory(deep_ep)

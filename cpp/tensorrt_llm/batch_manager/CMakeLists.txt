@@ -102,7 +102,11 @@ if(ENABLE_UCX)
 
 endif()
 
-find_library(TORCH_PYTHON_LIB torch_python REQUIRED
-             HINTS ${TORCH_INSTALL_PREFIX}/lib)
-target_link_libraries(${BATCH_MANAGER_STATIC_TARGET}
-                      PUBLIC ${TORCH_PYTHON_LIB} Python3::Python pg_utils)
+# The batch manager only needs torch_python/pg_utils when the PyTorch bits are built; a
+# --cpp_only build has neither, and nothing in the C++-only path references them.
+if(BUILD_PYT)
+  find_library(TORCH_PYTHON_LIB torch_python REQUIRED
+               HINTS ${TORCH_INSTALL_PREFIX}/lib)
+  target_link_libraries(${BATCH_MANAGER_STATIC_TARGET}
+                        PUBLIC ${TORCH_PYTHON_LIB} Python3::Python pg_utils)
+endif()

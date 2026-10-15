@@ -923,6 +923,7 @@ def main(*,
          out_of_tree: bool = False,
          use_3rdparty_cache: bool = False,
          fast_build: bool = False,
+         cpp_only: bool = False,
          only_run_setup: bool = False,
          install: bool = False,
          skip_building_wheel: bool = False,
@@ -1115,23 +1116,29 @@ def main(*,
                 "-- BOLT: Forcing NVRTC_DYNAMIC_LINKING=ON (static NVIDIA libs lack relocations)"
             )
 
-    targets = [
-        "tensorrt_llm", "th_common", "bindings", "deep_ep", "deep_gemm",
-        "pg_utils", "flash_mla"
-    ]
-    build_nccl_extensions_enabled = has_sm90_or_newer(cuda_architectures)
-    if build_nccl_extensions_enabled:
-        targets.append("nccl_extensions_wheel")
+    if cpp_only:
+        targets = ["tensorrt_llm"]
+        build_pyt = build_deep_ep = build_deep_gemm = build_flash_mla = "OFF"
+        build_nccl_extensions = "OFF"
+        build_nccl_extensions_enabled = False
     else:
-        print(
-            "WARNING: NCCL-EP requires SM90+ and will not be embedded in this wheel "
-            f"(CUDA architectures: {cuda_architectures}).")
+        targets = [
+            "tensorrt_llm", "th_common", "bindings", "deep_ep", "deep_gemm",
+            "pg_utils", "flash_mla"
+        ]
+        build_nccl_extensions_enabled = has_sm90_or_newer(cuda_architectures)
+        if build_nccl_extensions_enabled:
+            targets.append("nccl_extensions_wheel")
+        else:
+            print(
+                "WARNING: NCCL-EP requires SM90+ and will not be embedded in this wheel "
+                f"(CUDA architectures: {cuda_architectures}).")
 
-    build_pyt = "ON"
-    build_deep_ep = "ON"
-    build_nccl_extensions = "ON" if build_nccl_extensions_enabled else "OFF"
-    build_deep_gemm = "ON"
-    build_flash_mla = "ON"
+        build_pyt = "ON"
+        build_deep_ep = "ON"
+        build_nccl_extensions = "ON" if build_nccl_extensions_enabled else "OFF"
+        build_deep_gemm = "ON"
+        build_flash_mla = "ON"
 
     if micro_benchmarks:
         targets.append("micro_benchmarks")
@@ -1246,6 +1253,10 @@ def main(*,
         print("CMake Build command: ")
         print(cmake_build_command)
         build_run(cmake_build_command)
+
+    if cpp_only:
+        assert not install, "Installing is not supported for cpp_only builds"
+        return
 
     nccl_extensions_wheel = None
     if build_nccl_extensions_enabled:
@@ -1719,6 +1730,8 @@ def main(*,
 
 
 def add_arguments(parser: ArgumentParser):
+    parser.add_argument("--cpp_only", "-l", action="store_true",
+                        help="Only build the C++ library without Python dependencies")
     parser.add_argument("--only_run_setup", action="store_true",
                         help="Only run the setup steps and exit")
     parser.add_argument(

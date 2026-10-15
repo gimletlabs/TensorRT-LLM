@@ -96,5 +96,10 @@ if(NOT WIN32)
   target_link_options(runtime_src PUBLIC ${CONAN_LIBNUMA_LINK_OPTIONS})
 endif()
 
-# Add utils subdirectory for pg_utils module
-add_subdirectory(utils)
+# Add utils subdirectory for pg_utils module. pg_utils is torch-distributed glue
+# (c10d::ProcessGroup) and hard-requires libtorch/torch_python, so it can only be configured when
+# the PyTorch bits are being built at all -- otherwise a --cpp_only configure fails on its
+# REQUIRED find_library.
+if(BUILD_PYT)
+  add_subdirectory(utils)
+endif()
