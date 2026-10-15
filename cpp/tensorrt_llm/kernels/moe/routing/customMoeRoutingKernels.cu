@@ -194,9 +194,10 @@ __global__ void __launch_bounds__(pickBlockSize<MaxNumExperts>(), 1) customMoeRo
 #endif
 }
 
-// Internal linkage: topkLastDim.cu defines an identical helper at namespace scope, and the two
-// objects collide at link time whenever both are pulled into the same shared library.
-static int nextPowerOfTwo(int num)
+namespace
+{
+
+int nextPowerOfTwo(int num)
 {
     if (num <= 0)
     {
@@ -214,6 +215,8 @@ static int nextPowerOfTwo(int num)
     }
     return power;
 }
+
+} // namespace
 
 #define CASE(MAX_NUM_EXPERTS)                                                                                          \
     case MAX_NUM_EXPERTS:                                                                                              \
