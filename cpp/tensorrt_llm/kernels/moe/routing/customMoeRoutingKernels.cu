@@ -194,6 +194,9 @@ __global__ void __launch_bounds__(pickBlockSize<MaxNumExperts>(), 1) customMoeRo
 #endif
 }
 
+namespace
+{
+
 int nextPowerOfTwo(int num)
 {
     if (num <= 0)
@@ -212,6 +215,8 @@ int nextPowerOfTwo(int num)
     }
     return power;
 }
+
+} // namespace
 
 #define CASE(MAX_NUM_EXPERTS)                                                                                          \
     case MAX_NUM_EXPERTS:                                                                                              \
