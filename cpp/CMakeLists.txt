@@ -44,6 +44,14 @@ add_compile_definitions(TRTLLM_ABI_NAMESPACE=${TRTLLM_ABI_NAMESPACE})
 
 # Build options
 option(BUILD_PYT "Build in PyTorch TorchScript class mode" ON)
+option(BUILD_GIMLET_KERNELS_ONLY
+       "Build kernels and runtime utilities without the serving executor" OFF)
+if(BUILD_GIMLET_KERNELS_ONLY AND BUILD_PYT)
+  message(FATAL_ERROR "BUILD_GIMLET_KERNELS_ONLY requires BUILD_PYT=OFF")
+endif()
+if(BUILD_GIMLET_KERNELS_ONLY)
+  add_compile_definitions(TRTLLM_GIMLET_KERNELS_ONLY)
+endif()
 option(BUILD_TESTS "Build Google tests" ON)
 option(BUILD_DEEP_EP "Build the Deep EP module" ON)
 option(BUILD_NCCL_EXTENSIONS "Build the nccl-extensions Python wheel" ON)

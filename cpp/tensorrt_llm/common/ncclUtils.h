@@ -22,10 +22,12 @@
 #include "tensorrt_llm/runtime/utils/multiDeviceUtils.h"
 
 #if ENABLE_MULTI_DEVICE
-#include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime_api.h>
 #include <nccl.h>
+#ifndef TRTLLM_GIMLET_KERNELS_ONLY
+#include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -177,7 +179,7 @@ bool isNcclWindowSupported();
 // NCCL Window Buffer Allocation
 //==============================================================================
 
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0)
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 28, 0) && !defined(TRTLLM_GIMLET_KERNELS_ONLY)
 
 // Represents a buffer with an associated NCCL window
 struct NCCLWindowBuffer

@@ -39,6 +39,14 @@ add_subdirectory(fusedSampling)
 file(GLOB_RECURSE SRC_CPP *.cpp)
 file(GLOB_RECURSE SRC_CU *.cu)
 
+# These kernels depend on ATen/c10 and are called only by Torch operators.
+if(NOT BUILD_PYT)
+  list(FILTER SRC_CU EXCLUDE REGEX "/cuda_graph_grouped_gemm\\.cu$")
+  list(FILTER SRC_CU EXCLUDE REGEX "/fp8PerTokenQuant/fp8_per_token_quant\\.cu$")
+  list(FILTER SRC_CU EXCLUDE REGEX "/speculativeDecoding/dynamicTreeKernels\\.cu$")
+  list(FILTER SRC_CU EXCLUDE REGEX "/tinygemm2/tinygemm2_cuda\\.cu$")
+endif()
+
 # Exclude files in the cutlass_kernels, decoderMaskedMultiheadAttention and
 # selectiveScan trtllmGenKernels folder
 list(FILTER SRC_CPP EXCLUDE REGEX "cutlass_kernels/.*")
