@@ -305,6 +305,10 @@ if(NOT WIN32)
                         PROPERTIES BUILD_RPATH "$ORIGIN;$ORIGIN/../../../..")
 endif()
 
+if(BUILD_GPT_ATTENTION_PLUGIN)
+  add_subdirectory(plugins)
+endif()
+
 if(BUILD_PYT)
   add_subdirectory(thop)
 endif()
