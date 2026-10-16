@@ -237,7 +237,12 @@ bool XqaDispatcher::shouldUse(XQAParams const& params)
         {
             SHOULD_NOT_USE("Fallback to MMHA as tokens_per_block < 8 is not supported by TRTLLM-GEN kernels.");
         }
-        if (params.cyclic_attention_window_size != params.max_attention_window_size)
+        // A window shorter than the cache is fine for a linear paged cache (token p at page p / tokens_per_block,
+        // pages before the window released): the kernel applies mAttentionWindowSize at runtime and reads only
+        // the window's pages, as the PyTorch flow's KV manager lays them out too. Ring-buffer (contiguous)
+        // caches, beams and sink tokens still need MMHA.
+        bool const linear_paged_window = params.paged_kv_cache && params.beam_width == 1 && params.sink_token_length == 0;
+        if (params.cyclic_attention_window_size != params.max_attention_window_size && !linear_paged_window)
         {
             SHOULD_NOT_USE(
                 "Fallback to MMHA as variable attention_window_size is not supported by TRTLLM-GEN kernels.");
