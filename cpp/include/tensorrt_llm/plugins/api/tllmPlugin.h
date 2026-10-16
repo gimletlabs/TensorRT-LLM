@@ -16,9 +16,14 @@
 
 #pragma once
 
-// Capture safety API for embedders using the standalone attention kernels.
+// Plugin registration and capture safety APIs for standalone embedders.
 extern "C"
 {
+    // Available when BUILD_GPT_ATTENTION_PLUGIN=ON. Registers only GPTAttention.
+    // The logger argument is unused; the plugin uses the TensorRT-LLM logger.
+    // The caller must keep the library loaded while registered plugins are in use.
+    bool initTrtLlmPlugins(void* logger = nullptr, char const* libNamespace = "tensorrt_llm");
+
     void tllmResetCudaGraphGenerationUnsafeFlag();
     bool tllmCudaGraphGenerationUnsafeFlag();
 }
