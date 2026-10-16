@@ -265,9 +265,6 @@ target_link_libraries(
   PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,fp8_blockscale_gemm_src>
           $<LINK_LIBRARY:WHOLE_ARCHIVE,${INTERNAL_CUTLASS_KERNELS_TARGET}>)
 
-# Link kernel_src and cutlass_src. static internal cutlass lib overridden.
-target_link_libraries(${SHARED_TARGET} PUBLIC kernels_src cutlass_src)
-
 if(BUILD_GIMLET_KERNELS_ONLY)
   # The GPT attention plugin records per-layer context completion events.
   target_sources(${SHARED_TARGET} PRIVATE batch_manager/contextProgress.cpp)
@@ -281,6 +278,10 @@ else()
   # Cyclic dependency of executor on TRT-LLM
   target_link_libraries(${EXECUTOR_TARGET} INTERFACE ${SHARED_TARGET})
 endif()
+
+# Rescan kernels and CUTLASS after the batch manager and executor introduce
+# their references, so static archive members are pulled into the shared library.
+target_link_libraries(${SHARED_TARGET} PUBLIC kernels_src cutlass_src)
 
 # Cyclic dependency of UCX data transceiver on TRT-LLM
 if(TARGET ${UCX_WRAPPER_TARGET})
