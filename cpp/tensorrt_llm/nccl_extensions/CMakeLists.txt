@@ -13,6 +13,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
+# Use the same NCCL headers and library as TRT-LLM, without building the
+# upstream NCCL submodule.
+include(prepare_nccl_for_ep)
+prepare_nccl_for_ep()
+
 # Declared centrally in 3rdparty/fetch_content.json so the CI GitHub mirror and
 # source revision apply consistently to every FetchContent consumer.
 FetchContent_MakeAvailable(nccl_extensions_download)
@@ -31,14 +36,6 @@ if(NOT NCCL4PY_VERSION_RESULT EQUAL 0)
   )
 endif()
 
-# NCCL_HOME is the container-supplied NCCL that TRT-LLM discovered. Never clone
-# or build the upstream NCCL submodule here.
-get_filename_component(NCCL_EXTENSIONS_NCCL_LIB_DIR "${NCCL_LIBRARY}" DIRECTORY)
-get_filename_component(NCCL_EXTENSIONS_NCCL_HOME
-                       "${NCCL_EXTENSIONS_NCCL_LIB_DIR}" DIRECTORY)
-set(NCCL_HOME
-    "${NCCL_EXTENSIONS_NCCL_HOME}"
-    CACHE PATH "NCCL container installation used by nccl-extensions" FORCE)
 set(NCCL_EP_BUILDDIR
     "${CMAKE_CURRENT_BINARY_DIR}/nccl_ep_build"
     CACHE PATH "NCCL EP artifact output" FORCE)
