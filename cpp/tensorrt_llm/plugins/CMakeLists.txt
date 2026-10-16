@@ -20,6 +20,7 @@ target_sources(
           gptAttentionCommon/gptAttentionCommon.cpp
           gptAttentionPlugin/gptAttentionPlugin.cpp)
 target_include_directories(${SHARED_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common)
+target_compile_definitions(${SHARED_TARGET} PRIVATE BUILD_GPT_ATTENTION_PLUGIN)
 
 find_library(NVINFER_LIBRARY NAMES nvinfer REQUIRED)
 target_link_libraries(${SHARED_TARGET} PRIVATE ${NVINFER_LIBRARY})
