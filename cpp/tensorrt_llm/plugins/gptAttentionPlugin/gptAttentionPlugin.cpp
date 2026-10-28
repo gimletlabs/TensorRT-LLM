@@ -536,6 +536,13 @@ void GPTAttentionPlugin::configurePluginImpl(nvinfer1::DynamicPluginTensorDesc c
     TLLM_CHECK_DEBUG(ctxLenTensor.max.nbDims == 1);
     int32_t const max_batch_beam = in[getIdx(IdxEntry::CONTEXT_LENGTHS)].max.d[0];
     reserveSemaphoreArray(mNumHeads * max_batch_beam);
+
+    // Bounds of the trtllm-gen FMHA JIT warm-up grid (the TRT plugin path never sets them). The
+    // request bound is the same for every optimization profile rather than this profile's batch:
+    // each profile gets its own plugin instance, and a grid sized to the profile would leave the
+    // kernels of the larger decode batches to compile (seconds each) mid-serving.
+    mMaxNumRequests = std::max(max_batch_beam, num_requests);
+    mMaxSeqLen = max_attention_window_size;
 }
 
 template <typename T>
@@ -1138,6 +1145,17 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
         {
             // mUseSpecDecoding is changed, need to re-prepare the DecoderXQARunner
             prepareEnqueueGeneration<T, KVCacheBuffer>(enqueue_params);
+        }
+
+        if (!mGenJitWarmedUp)
+        {
+            cudaStreamCaptureStatus captureStatus = cudaStreamCaptureStatusNone;
+            TLLM_CUDA_CHECK(cudaStreamIsCapturing(stream, &captureStatus));
+            if (captureStatus == cudaStreamCaptureStatusNone)
+            {
+                enqueue_params.trtllm_gen_jit_warmup = true;
+                mGenJitWarmedUp = true;
+            }
         }
 
         enqueueGeneration<T, KVCacheBuffer>(enqueue_params, stream);

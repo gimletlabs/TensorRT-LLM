@@ -180,6 +180,11 @@ private:
 
     using IndexType = std::int32_t;
 
+    // Set once a generation enqueue outside CUDA graph capture has JIT-compiled the trtllm-gen FMHA
+    // warm-up grid; a kernel first selected mid-capture would otherwise compile and load a module
+    // while the stream is capturing, which is illegal.
+    bool mGenJitWarmedUp{false};
+
     std::vector<size_t> mEntryIdx;
     enum class IdxEntry : size_t
     {
