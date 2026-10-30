@@ -28,6 +28,7 @@
 
 #include "tensorrt_llm/common/attentionOp.h"
 #include "tensorrt_llm/kernels/causalConv1d/causalConv1d.h"
+#include "tensorrt_llm/kernels/mlaChunkedPrefill.cuh"
 #include "tensorrt_llm/kernels/moe/communication/moeAlltoAllKernels.h"
 #include "tensorrt_llm/kernels/moe/routing/customMoeRoutingKernels.h"
 #include "tensorrt_llm/kernels/quantization.h"
@@ -91,6 +92,8 @@ void const* gimletKernelExportAnchors[] = {
     customMoeRoutingAnchorNoSoftmax<__nv_bfloat16, float>(),
     customMoeRoutingAnchorNoSoftmax<__nv_bfloat16, __nv_bfloat16>(),
     mxFp8QuantizationAnchor<__nv_bfloat16>(),
+    reinterpret_cast<void const*>(&invokeMLALoadChunkedKV<__nv_bfloat16, __nv_bfloat16>),
+    reinterpret_cast<void const*>(&invokeMergeAttnWithSoftmax<__nv_bfloat16>),
 #endif
 };
 
