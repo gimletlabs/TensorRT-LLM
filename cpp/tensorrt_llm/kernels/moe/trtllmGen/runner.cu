@@ -426,6 +426,10 @@ tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions getOptions(btg::Dtype d
     // which only implements SwiGlu math; SiTu is available exclusively through fused FC1 cubins.
     TLLM_CHECK_WITH_INFO(!(useDeepSeekFp8 && actType == ActType::SiTu),
         "SiTu activation is not supported with DeepSeek FP8 (no standalone SiTu activation kernel).");
+    // Unquantized experts run on the BF16 x BF16 trtllm-gen cubins, which take BF16 activations,
+    // write BF16 and have no DeepSeek FP8 variant.
+    TLLM_CHECK_WITH_INFO(dtypeWeights != btg::Dtype::Bfloat16 || (dtypeAct == btg::Dtype::Bfloat16 && !useDeepSeekFp8),
+        "BF16 MoE weights require BF16 activations and useDeepSeekFp8=false.");
     tensorrt_llm::kernels::TrtllmGenBatchedGemmRunnerOptions options;
 
     if (is_gated_activation)
@@ -536,8 +540,8 @@ int32_t Runner::getDefaultValidConfigIndex(int32_t topK, int32_t hiddenSize, int
     auto maxNumCgasInBatchDim = Routing::getMaxNumCgasInBatchDim(numTokens, topK, numExperts, mTileTokensDim);
     bool is_gated_activation = tensorrt_llm::kernels::isGatedActType(mActType);
     return mRunner.getDefaultValidConfigIndex(numTokens, is_gated_activation ? 2 * intermediateSize : intermediateSize,
-        hiddenSize, {}, numTokens, numExperts, maxNumCgasInBatchDim, numTokens, 2 * validIntermediateSize,
-        validHiddenSize);
+        hiddenSize, {}, numTokens, numExperts, maxNumCgasInBatchDim, numTokens,
+        (is_gated_activation ? 2 : 1) * validIntermediateSize, validHiddenSize);
 }
 
 bool Runner::isValidConfigIndex(int32_t configIndex, int32_t topK, int32_t hiddenSize, int32_t intermediateSize,
@@ -551,7 +555,7 @@ bool Runner::isValidConfigIndex(int32_t configIndex, int32_t topK, int32_t hidde
     bool is_gated_activation = tensorrt_llm::kernels::isGatedActType(mActType);
     auto const isValid = mRunner.isValidConfigIndex(configIndex, numTokens,
         is_gated_activation ? 2 * intermediateSize : intermediateSize, hiddenSize, {}, numTokens, numExperts,
-        maxNumCgasInBatchDim, numTokens, 2 * validIntermediateSize, validHiddenSize);
+        maxNumCgasInBatchDim, numTokens, (is_gated_activation ? 2 : 1) * validIntermediateSize, validHiddenSize);
 
     return isValid;
 }
@@ -675,6 +679,7 @@ Runner::Runner(btg::Dtype dtypeAct, btg::Dtype dtypeWeights, bool useDeepSeekFp8
     , mGemm2(Gemm2::Runner(dtypeAct, dtypeWeights, btg::Dtype::Bfloat16, useDeepSeekFp8, tileTokensDim, useFineGrained))
     , mActType(actType)
     , mTileTokensDim(tileTokensDim)
+    , mDtypeWeights(dtypeWeights)
 {
     auto const& gemm1PassingIndices = mPermuteGemm1.getPassingConfigIndices();
     auto const& gemm2PassingIndices = mGemm2.getPassingConfigIndices();
@@ -780,9 +785,30 @@ std::tuple<int32_t, int32_t> Runner::getWorkspaceSizeInBytes(MoERunnerArgs const
     return std::make_tuple(workspace_size_fc1, workspace_size_fc2);
 }
 
+void Runner::checkBf16Shapes(
+    int32_t hiddenSize, int32_t intermediateSize, int32_t validHiddenSize, int32_t validIntermediateSize) const
+{
+    if (mDtypeWeights != btg::Dtype::Bfloat16)
+    {
+        return;
+    }
+    // BF16 weights use the BlockMajorK layout: each expert is [K / 64, M, 64] with M padded to the
+    // 128-row MMA tile, and the kernels cannot mask a partial (valid) M, N or K. Callers must pad
+    // both sizes to 128 and pass no separate valid sizes.
+    TLLM_CHECK_WITH_INFO(hiddenSize % 128 == 0 && intermediateSize % 128 == 0,
+        "BF16 MoE requires hidden_size (%d) and intermediate_size (%d) to be multiples of 128.", hiddenSize,
+        intermediateSize);
+    TLLM_CHECK_WITH_INFO((validHiddenSize <= 0 || validHiddenSize == hiddenSize)
+            && (validIntermediateSize <= 0 || validIntermediateSize == intermediateSize),
+        "BF16 MoE (BlockMajorK weights) does not support valid sizes smaller than the padded sizes "
+        "(hidden %d/%d, intermediate %d/%d).",
+        validHiddenSize, hiddenSize, validIntermediateSize, intermediateSize);
+}
+
 std::vector<int64_t> Runner::getValidConfigIndices(int32_t topK, int32_t hiddenSize, int32_t intermediateSize,
     int32_t numLocalExperts, int32_t numTokens, int32_t validHiddenSize, int32_t validIntermediateSize) const
 {
+    checkBf16Shapes(hiddenSize, intermediateSize, validHiddenSize, validIntermediateSize);
     std::vector<int64_t> validIndices;
 
     for (int i = 0; i < mPassingConfigs.size(); ++i)
@@ -811,6 +837,7 @@ std::vector<int64_t> Runner::getValidConfigIndices(int32_t topK, int32_t hiddenS
 int64_t Runner::getDefaultValidConfigIndex(int32_t topK, int32_t hiddenSize, int32_t intermediateSize,
     int32_t numLocalExperts, int32_t numTokens, int32_t validHiddenSize, int32_t validIntermediateSize) const
 {
+    checkBf16Shapes(hiddenSize, intermediateSize, validHiddenSize, validIntermediateSize);
     int32_t indexGemm1 = mPermuteGemm1.getDefaultValidConfigIndex(
         topK, hiddenSize, intermediateSize, numLocalExperts, numTokens, validHiddenSize, validIntermediateSize);
     int32_t indexGemm2 = mGemm2.getDefaultValidConfigIndex(
@@ -831,6 +858,17 @@ void Runner::run(
     moe::dev::finalize::Data finalizeData;
     moe::dev::convertsf::Data convertSfData;
     sync_check_cuda_error(stream);
+    if (mDtypeWeights == btg::Dtype::Bfloat16)
+    {
+        checkBf16Shapes(args.hidden_size, args.intermediate_size, args.valid_hidden_size.value_or(-1),
+            args.valid_intermediate_size.value_or(-1));
+        TLLM_CHECK_WITH_INFO(!args.output_hidden_size.has_value() || *args.output_hidden_size == args.hidden_size,
+            "BF16 MoE does not support an output_hidden_size different from hidden_size.");
+        // The BF16 cubins have no FP32 bias and no per-token scaling of the activations.
+        TLLM_CHECK_WITH_INFO(args.gemm1_bias == nullptr && args.gemm2_bias == nullptr,
+            "BF16 MoE kernels do not support gemm1_bias/gemm2_bias.");
+        TLLM_CHECK_WITH_INFO(!args.mUseRoutingScalesOnInput, "BF16 MoE does not support routing scales on input.");
+    }
     setOpsData(args, workspace, convertSfData, activationData, finalizeData);
 
     int32_t const totalLocalExperts = args.local_num_experts + args.num_fused_shared_experts;

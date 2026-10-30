@@ -198,6 +198,15 @@ TrtllmGenBatchedGemmRunner::TrtllmGenBatchedGemmRunner(TrtllmGenBatchedGemmRunne
             continue;
         }
 
+        // The host runner only forwards an FP32 bias (one value per output row or column) and never
+        // sets mPtrPermutedIdxToBiasRowIdx, so it cannot drive per-element (Mn) bias kernels, such as
+        // the biasBfloat16Mn BF16 x BF16 MoE cubins. FlashInfer's runner filters them out the same
+        // way unless a caller explicitly asks for an Mn bias.
+        if (!acceptIf(options.mBiasType != BiasType::Mn, "BiasType::Mn is not supported by the host runner"))
+        {
+            continue;
+        }
+
         if (!acceptIf(dtypeMatch,
                 fmtstr("dtypeAB mismatch (kernel: %s/%s, expected canonical: %s/%s)",
                     tg::dtypeToString(options.mDtypeA).c_str(), tg::dtypeToString(options.mDtypeB).c_str(),

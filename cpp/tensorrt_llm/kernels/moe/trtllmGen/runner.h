@@ -417,6 +417,23 @@ struct MoEConfig
     int64_t gemm2Config;
 };
 
+// Unquantized (BF16) experts: Runner(Dtype::Bfloat16, Dtype::Bfloat16, useDeepSeekFp8 = false, tileTokensDim,
+// ActType::SwiGlu or ActType::Relu2) selects the BF16 x BF16 trtllm-gen cubins (sm100f; tileTokensDim 8, 16,
+// 32, 64 or 128). Their contract:
+//  * hidden_states: BF16 [num_tokens, hidden_size], row-major. mDtypeElt = mDtypeOut = Bfloat16.
+//    hidden_states_scale, gemm{1,2}_weights_scale, output{1,2}_scales_scalar, output1_scales_gate_scalar and
+//    gemm{1,2}_bias are nullptr, and mUseRoutingScalesOnInput is false. gemm1_alpha, gemm1_beta and
+//    gemm1_clamp_limit are optional per-expert FP32 SwiGLU parameters.
+//  * hidden_size and intermediate_size are multiples of 128; valid_hidden_size, valid_intermediate_size and
+//    output_hidden_size are unset or equal to the padded sizes, because BlockMajorK weights cannot be masked.
+//  * Weights are BF16 in the BlockMajorK layout with 128-byte (64-element) K blocks and rows shuffled for the
+//    128-row epilogue tile:
+//      gemm1_weights [E, hidden_size / 64, R1, 64], R1 = 2 * intermediate_size (SwiGLU) or intermediate_size;
+//      gemm2_weights [E, intermediate_size / 64, hidden_size, 64].
+//    Per expert, start from the row-major [rows, K] matrix (gemm1: up (w3) rows stacked above gate (w1)
+//    rows; gemm2: w2), permute its rows (gemm1 SwiGLU: interleave up/gate rows, then shuffle; otherwise
+//    shuffle only) and split K into 64-element blocks: out[k / 64][r][k % 64] = W[perm[r]][k].
+//    FlashInfer's prepare_trtllm_bf16_weights (flashinfer/fused_moe/prepare.py) produces this layout.
 class Runner
 {
 public:
@@ -444,6 +461,10 @@ private:
     void setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace, moe::dev::convertsf::Data& convertSfData,
         moe::dev::activation::Data& activationData, moe::dev::finalize::Data& finalizeData);
 
+    // Checks the size constraints of the BF16 weight layout; a no-op for other weight dtypes.
+    void checkBf16Shapes(
+        int32_t hiddenSize, int32_t intermediateSize, int32_t validHiddenSize, int32_t validIntermediateSize) const;
+
 private:
     PermuteGemm1::Runner mPermuteGemm1;
     Gemm2::Runner mGemm2;
@@ -451,6 +472,7 @@ private:
     // Kept so setOpsData can tell the activation launcher how much per-expert
     // tile padding the permuted row space carries.
     int32_t mTileTokensDim;
+    batchedGemm::trtllm::gen::Dtype mDtypeWeights;
 
     // This will be the cartesian product of the passing configs for gemm1 and gemm2
     // This allows us to autotune the MoE as one operation instead of tuning gemm1 and gemm2 separately
