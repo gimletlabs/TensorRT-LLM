@@ -444,6 +444,10 @@ private:
     void setOpsData(MoERunnerArgs const& args, MoEWorkspace const& workspace, moe::dev::convertsf::Data& convertSfData,
         moe::dev::activation::Data& activationData, moe::dev::finalize::Data& finalizeData);
 
+    // Checks the size constraints of the BF16 weight layout; a no-op for other weight dtypes.
+    void checkBf16Shapes(
+        int32_t hiddenSize, int32_t intermediateSize, int32_t validHiddenSize, int32_t validIntermediateSize) const;
+
 private:
     PermuteGemm1::Runner mPermuteGemm1;
     Gemm2::Runner mGemm2;
@@ -451,6 +455,7 @@ private:
     // Kept so setOpsData can tell the activation launcher how much per-expert
     // tile padding the permuted row space carries.
     int32_t mTileTokensDim;
+    batchedGemm::trtllm::gen::Dtype mDtypeWeights;
 
     // This will be the cartesian product of the passing configs for gemm1 and gemm2
     // This allows us to autotune the MoE as one operation instead of tuning gemm1 and gemm2 separately
