@@ -19,8 +19,8 @@
 // Plugin registration and capture safety APIs for standalone embedders.
 extern "C"
 {
-#ifdef BUILD_GPT_ATTENTION_PLUGIN
-    // Available when BUILD_GPT_ATTENTION_PLUGIN=ON. Registers only GPTAttention.
+#if defined(BUILD_GPT_ATTENTION_PLUGIN) || defined(BUILD_MOE_PLUGIN)
+    // Registers the plugins enabled by BUILD_GPT_ATTENTION_PLUGIN and BUILD_MOE_PLUGIN.
     // The logger argument is unused; the plugin uses the TensorRT-LLM logger.
     // The caller must keep the library loaded while registered plugins are in use.
     bool initTrtLlmPlugins(void* logger = nullptr, char const* libNamespace = "tensorrt_llm");
