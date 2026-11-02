@@ -305,7 +305,7 @@ if(NOT WIN32)
                         PROPERTIES BUILD_RPATH "$ORIGIN;$ORIGIN/../../../..")
 endif()
 
-if(BUILD_GPT_ATTENTION_PLUGIN)
+if(BUILD_GPT_ATTENTION_PLUGIN OR BUILD_MOE_PLUGIN)
   add_subdirectory(plugins)
 endif()
 

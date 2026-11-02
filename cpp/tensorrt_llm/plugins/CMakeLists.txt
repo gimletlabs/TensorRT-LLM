@@ -13,14 +13,33 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 target_sources(
-  ${SHARED_TARGET}
-  PRIVATE api/tllmPlugin.cpp
-          common/checkMacrosPlugin.cpp
-          common/plugin.cpp
-          gptAttentionCommon/gptAttentionCommon.cpp
-          gptAttentionPlugin/gptAttentionPlugin.cpp)
-target_include_directories(${SHARED_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common)
-target_compile_definitions(${SHARED_TARGET} PRIVATE BUILD_GPT_ATTENTION_PLUGIN)
+  ${SHARED_TARGET} PRIVATE api/tllmPlugin.cpp common/checkMacrosPlugin.cpp
+                           common/plugin.cpp)
+target_include_directories(${SHARED_TARGET}
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common)
+
+if(BUILD_GPT_ATTENTION_PLUGIN)
+  target_sources(
+    ${SHARED_TARGET} PRIVATE gptAttentionCommon/gptAttentionCommon.cpp
+                             gptAttentionPlugin/gptAttentionPlugin.cpp)
+  target_compile_definitions(${SHARED_TARGET}
+                             PRIVATE BUILD_GPT_ATTENTION_PLUGIN)
+endif()
+
+if(BUILD_MOE_PLUGIN)
+  if(NOT USING_OSS_CUTLASS_MOE_GEMM)
+    message(FATAL_ERROR "BUILD_MOE_PLUGIN requires USING_OSS_CUTLASS_MOE_GEMM")
+  endif()
+  target_sources(
+    ${SHARED_TARGET}
+    PRIVATE common/gemmPluginProfiler.cpp cudaStreamPlugin/cudaStreamPlugin.cpp
+            gemmPlugin/gemmPlugin.cpp
+            mixtureOfExperts/mixtureOfExpertsPlugin.cpp)
+  target_compile_definitions(
+    ${SHARED_TARGET}
+    PRIVATE BUILD_MOE_PLUGIN
+            $<$<BOOL:${USING_OSS_CUTLASS_MOE_GEMM}>:USING_OSS_CUTLASS_MOE_GEMM>)
+endif()
 
 find_library(NVINFER_LIBRARY NAMES nvinfer REQUIRED)
 target_link_libraries(${SHARED_TARGET} PRIVATE ${NVINFER_LIBRARY})

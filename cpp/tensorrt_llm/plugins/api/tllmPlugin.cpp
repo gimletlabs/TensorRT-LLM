@@ -15,12 +15,19 @@
  */
 
 #include "tensorrt_llm/plugins/api/tllmPlugin.h"
+#ifdef BUILD_GPT_ATTENTION_PLUGIN
 #include "tensorrt_llm/plugins/gptAttentionPlugin/gptAttentionPlugin.h"
+#endif
+#ifdef BUILD_MOE_PLUGIN
+#include "tensorrt_llm/plugins/cudaStreamPlugin/cudaStreamPlugin.h"
+#include "tensorrt_llm/plugins/mixtureOfExperts/mixtureOfExpertsPlugin.h"
+#endif
 
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 extern "C" bool initTrtLlmPlugins(void* logger, char const* libNamespace)
 {
@@ -33,24 +40,41 @@ extern "C" bool initTrtLlmPlugins(void* logger, char const* libNamespace)
     try
     {
         static std::mutex mutex;
-        static std::map<std::string, std::unique_ptr<tensorrt_llm::plugins::GPTAttentionPluginCreator>> creators;
+        using Creators = std::vector<std::unique_ptr<nvinfer1::IPluginCreator>>;
+        static std::map<std::string, Creators> creators;
         std::lock_guard<std::mutex> lock(mutex);
         if (creators.contains(libNamespace))
         {
             return true;
         }
-        auto creator = std::make_unique<tensorrt_llm::plugins::GPTAttentionPluginCreator>();
-        creator->setPluginNamespace(libNamespace);
         auto* registry = getPluginRegistry();
         if (registry == nullptr)
         {
             return false;
         }
-        auto const entry = creators.emplace(libNamespace, std::move(creator)).first;
-        if (!registry->registerCreator(*entry->second, libNamespace))
+        Creators pending;
+#ifdef BUILD_GPT_ATTENTION_PLUGIN
+        pending.push_back(std::make_unique<tensorrt_llm::plugins::GPTAttentionPluginCreator>());
+#endif
+#ifdef BUILD_MOE_PLUGIN
+        pending.push_back(std::make_unique<tensorrt_llm::plugins::MixtureOfExpertsPluginCreator>());
+        pending.push_back(std::make_unique<tensorrt_llm::plugins::CudaStreamPluginCreator>());
+#endif
+        auto const entry = creators.emplace(libNamespace, std::move(pending)).first;
+        size_t registered = 0;
+        for (auto& creator : entry->second)
         {
-            creators.erase(entry);
-            return false;
+            creator->setPluginNamespace(libNamespace);
+            if (!registry->registerCreator(*creator, libNamespace))
+            {
+                for (size_t i = 0; i < registered; ++i)
+                {
+                    registry->deregisterCreator(*entry->second[i]);
+                }
+                creators.erase(entry);
+                return false;
+            }
+            ++registered;
         }
         return true;
     }
