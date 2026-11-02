@@ -32,7 +32,8 @@ if(BUILD_MOE_PLUGIN)
   endif()
   target_sources(
     ${SHARED_TARGET}
-    PRIVATE common/gemmPluginProfiler.cpp gemmPlugin/gemmPlugin.cpp
+    PRIVATE common/gemmPluginProfiler.cpp cudaStreamPlugin/cudaStreamPlugin.cpp
+            gemmPlugin/gemmPlugin.cpp
             mixtureOfExperts/mixtureOfExpertsPlugin.cpp)
   target_compile_definitions(
     ${SHARED_TARGET}

@@ -19,6 +19,7 @@
 #include "tensorrt_llm/plugins/gptAttentionPlugin/gptAttentionPlugin.h"
 #endif
 #ifdef BUILD_MOE_PLUGIN
+#include "tensorrt_llm/plugins/cudaStreamPlugin/cudaStreamPlugin.h"
 #include "tensorrt_llm/plugins/mixtureOfExperts/mixtureOfExpertsPlugin.h"
 #endif
 
@@ -57,6 +58,7 @@ extern "C" bool initTrtLlmPlugins(void* logger, char const* libNamespace)
 #endif
 #ifdef BUILD_MOE_PLUGIN
         pending.push_back(std::make_unique<tensorrt_llm::plugins::MixtureOfExpertsPluginCreator>());
+        pending.push_back(std::make_unique<tensorrt_llm::plugins::CudaStreamPluginCreator>());
 #endif
         auto const entry = creators.emplace(libNamespace, std::move(pending)).first;
         size_t registered = 0;
