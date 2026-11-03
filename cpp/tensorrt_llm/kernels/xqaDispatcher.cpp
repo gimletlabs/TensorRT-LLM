@@ -20,6 +20,7 @@
 #include "tensorrt_llm/kernels/decoderMaskedMultiheadAttention/decoderXQARunnerUtils.h"
 #include "tensorrt_llm/kernels/sparseAttentionKernels.h"
 #include "tensorrt_llm/kernels/unfusedAttentionKernels.h"
+#include <climits>
 #include <cstdint>
 
 namespace
@@ -237,7 +238,13 @@ bool XqaDispatcher::shouldUse(XQAParams const& params)
         {
             SHOULD_NOT_USE("Fallback to MMHA as tokens_per_block < 8 is not supported by TRTLLM-GEN kernels.");
         }
-        if (params.cyclic_attention_window_size != params.max_attention_window_size)
+        // This fallback was intended to prevent usage of SWA kernels with different window sizes.
+        // However, GPTAttention passes in max_attention_window_size the same across all layers (since it uses the size of the CACHE_INDIR tensor).
+        // So for models with SWA layers, this forces fallback to MMHA kernels, even if every SWA layer uses the same window size.
+        // The TRTLLM-GEN kernels handle the per-layer window via mAttentionWindowSize when the KV cache is a linear paged table, so we allow them in that case.
+        // Contiguous KV caches still need MMHA's cyclic remapping, and chunked attention requires the window to cover maxSeqLenKv, so those still fall back.
+        bool const linear_paged_kv = params.paged_kv_cache && params.chunked_attention_size == INT_MAX;
+        if (params.cyclic_attention_window_size != params.max_attention_window_size && !linear_paged_kv)
         {
             SHOULD_NOT_USE(
                 "Fallback to MMHA as variable attention_window_size is not supported by TRTLLM-GEN kernels.");
