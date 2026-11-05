@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +36,7 @@
 #include "nvrtc.h"
 #include "runtime.cuh"
 #include "scheduler.cuh"
+#include "tensorrt_llm/common/jitCacheLock.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -340,6 +341,9 @@ public:
             + std::to_string(num_groups) + "_" + std::to_string(num_stages) + "_" + std::to_string(num_tma_multicast)
             + "_" + gemm_type_to_string(gemm_type);
         std::filesystem::path path = getCacheDir() / name;
+
+        // Hold the lock through the compile so each kernel is compiled and inserted once; see RuntimeCacheTag.
+        tensorrt_llm::common::JitCacheLock<RuntimeCacheTag> const jitCacheLock;
 
         // Check runtime cache or file system hit
         auto& runtimeCache = getGlobalRuntimeCache();

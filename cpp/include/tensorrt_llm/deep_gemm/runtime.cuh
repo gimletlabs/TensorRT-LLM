@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +21,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -90,42 +91,44 @@ public:
 
     CUkernel getKernel()
     {
-        // Load shared object if not already loaded
-        if (kernel_ == nullptr)
-        {
-            if (cubin_.empty())
+        // RuntimeCache shares a Runtime with every thread in the process, including threads that drive other
+        // devices. CUlibrary and CUkernel are context-independent, so load the library once for all of them.
+        std::call_once(load_once_,
+            [this]
             {
-                std::filesystem::path cubinPath = std::filesystem::path(path_);
-                cubinPath /= kKernelName;
-                std::ifstream cubinFile(cubinPath.string(), std::ios::binary);
-                cubin_ = std::vector<char>(std::istreambuf_iterator<char>(cubinFile), {});
-            }
-
-            CHECK_CUDA(cuLibraryLoadData(&lib_, cubin_.data(), nullptr, nullptr, 0, nullptr, nullptr, 0));
-
-            unsigned int numKernels = 0;
-            CHECK_CUDA(cuLibraryGetKernelCount(&numKernels, lib_));
-
-            std::vector<CUkernel> kernels(numKernels);
-            CHECK_CUDA(cuLibraryEnumerateKernels(kernels.data(), numKernels, lib_));
-
-            for (auto kernel : kernels)
-            {
-                char const* kernelName;
-                CHECK_CUDA(cuKernelGetName(&kernelName, kernel));
-                std::string kernelNameStr(kernelName);
-                if (kernelNameStr.find("fp8_gemm_kernel") != std::string::npos)
+                if (cubin_.empty())
                 {
-                    kernel_ = kernel;
-                    break;
+                    std::filesystem::path cubinPath = std::filesystem::path(path_);
+                    cubinPath /= kKernelName;
+                    std::ifstream cubinFile(cubinPath.string(), std::ios::binary);
+                    cubin_ = std::vector<char>(std::istreambuf_iterator<char>(cubinFile), {});
                 }
-            }
 
-            if (!kernel_)
-            {
-                throw std::runtime_error("Failed to find fp8_gemm_kernel");
-            }
-        }
+                CHECK_CUDA(cuLibraryLoadData(&lib_, cubin_.data(), nullptr, nullptr, 0, nullptr, nullptr, 0));
+
+                unsigned int numKernels = 0;
+                CHECK_CUDA(cuLibraryGetKernelCount(&numKernels, lib_));
+
+                std::vector<CUkernel> kernels(numKernels);
+                CHECK_CUDA(cuLibraryEnumerateKernels(kernels.data(), numKernels, lib_));
+
+                for (auto kernel : kernels)
+                {
+                    char const* kernelName;
+                    CHECK_CUDA(cuKernelGetName(&kernelName, kernel));
+                    std::string kernelNameStr(kernelName);
+                    if (kernelNameStr.find("fp8_gemm_kernel") != std::string::npos)
+                    {
+                        kernel_ = kernel;
+                        break;
+                    }
+                }
+
+                if (!kernel_)
+                {
+                    throw std::runtime_error("Failed to find fp8_gemm_kernel");
+                }
+            });
 
         return kernel_;
     }
@@ -135,7 +138,14 @@ private:
     std::vector<char> cubin_;
     CUlibrary lib_;
     CUkernel kernel_;
+    std::once_flag load_once_;
     deep_gemm::GemmType gemm_type_;
+};
+
+//! Names RuntimeCache for tensorrt_llm::common::JitCacheLock. RuntimeCache is not thread-safe, and set() frees the
+//! Runtime it replaces, so hold this lock across a lookup, the compile it may trigger, and the insertion.
+struct RuntimeCacheTag
+{
 };
 
 /**
