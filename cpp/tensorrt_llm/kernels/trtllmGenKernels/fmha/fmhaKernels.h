@@ -1571,12 +1571,13 @@ public:
     static TllmFmhaKernelFactory& Get()
     {
         static std::unique_ptr<TllmFmhaKernelFactory> sFactory[32] = {nullptr};
+        static std::once_flag sFactoryOnce[32];
         int const deviceId = tensorrt_llm::common::getDevice();
         TLLM_CHECK_WITH_INFO(deviceId < 32, "Invalid deviceId %d (must be < 32)", deviceId);
-        if (sFactory[deviceId] == nullptr)
-        {
-            sFactory[deviceId] = std::make_unique<TllmFmhaKernelFactory>(TllmFmhaKernelFactory());
-        }
+        // Several threads can drive the same device (e.g. engines that share a GPU), and they can reach their first
+        // attention launch at the same time.
+        std::call_once(sFactoryOnce[deviceId],
+            [deviceId] { sFactory[deviceId] = std::make_unique<TllmFmhaKernelFactory>(TllmFmhaKernelFactory()); });
         return *(sFactory[deviceId]);
     }
 
