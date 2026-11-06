@@ -166,6 +166,8 @@ public:
     int getNbOutputs() const noexcept override;
 
     //! This is called on every trt ExecutionContext creation by TRT
+    int initialize() noexcept override;
+
     //! Note TRT does not call the initialize on cloned plugin, so clone internally should do initialization.
     GPTAttentionPlugin* clone() const noexcept override;
 

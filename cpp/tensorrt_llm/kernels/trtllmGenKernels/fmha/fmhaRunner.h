@@ -47,6 +47,9 @@ public:
     // Get the total device memory.
     size_t getTotalDeviceMemory() const;
 
+    //! Compile the requested JIT grid without reading or writing tensor buffers.
+    void warmup(TllmGenFmhaRunnerParams const& runnerParams);
+
     // Run the fmha kernel.
     void run(TllmGenFmhaRunnerParams const&);
 
