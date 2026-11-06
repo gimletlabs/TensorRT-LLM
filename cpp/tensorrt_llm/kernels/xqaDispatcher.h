@@ -84,6 +84,9 @@ public:
     // Prepare for DecoderXQARunner.
     void prepare(XQAParams const& params);
 
+    //! Compile ordinary paged decode kernels without executing attention or touching the KV cache.
+    void warmup(int maxNumRequests, int maxSeqLenKv);
+
     // Check whether XQA is supported.
     bool isSupported();
 

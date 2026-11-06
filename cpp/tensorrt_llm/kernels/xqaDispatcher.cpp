@@ -163,6 +163,47 @@ void XqaDispatcher::prepare(XQAParams const& params)
     }
 }
 
+void XqaDispatcher::warmup(int maxNumRequests, int maxSeqLenKv)
+{
+    // Other attention modes keep their first-enqueue warmup, where request-dependent options are available.
+    if (!mUseTllmGen || !mFixedParams.isPagedKv || mFixedParams.isSpecDecoding || mFixedParams.isMLA
+        || mFixedParams.useTllmGenSparseAttention || maxNumRequests <= 0 || maxSeqLenKv <= 0)
+    {
+        return;
+    }
+    TllmGenFmhaRunnerParams params{};
+    // Initialization has no execution stream; avoid the legacy stream's implicit capture dependencies.
+    params.stream = cudaStreamPerThread;
+    params.mKernelType = FmhaKernelType::Generation;
+    params.mQkvLayout = QkvLayout::PagedKv;
+    params.mMaskType = TrtllmGenAttentionMaskType::Causal;
+    params.mHeadDimQk = mFixedParams.headSize;
+    params.mHeadDimV = mFixedParams.headSize;
+    params.mNumHeadsQ = mFixedParams.numQHeads;
+    params.mNumHeadsKv = mFixedParams.numKvHeads;
+    params.mNumHeadsQPerKv = mFixedParams.numQHeads / mFixedParams.numKvHeads;
+    params.mMaxSeqLenQ = 1;
+    params.mMaxSeqLenCacheKv = maxSeqLenKv;
+    params.mAttentionWindowSize = maxSeqLenKv;
+    params.mChunkedAttentionSize = INT_MAX;
+    params.mMaxNumPagesPerSeqKv = divUp(maxSeqLenKv, mFixedParams.numTokensPerBlock);
+    params.mNumTokensPerPage = mFixedParams.numTokensPerBlock;
+    params.mNumPagesInMemPool = INT_MAX;
+    params.mMultiProcessorCount = mMultiProcessorCount;
+    params.mScaleQ = mFixedParams.qScaling;
+    params.mJITWarmup = true;
+    params.mJITWarmupMaxNumRequests = maxNumRequests;
+    params.mJITWarmupMaxSeqLenQ = 1;
+    params.mJITWarmupMaxSeqLenKv = maxSeqLenKv;
+    // A runtime performance knob chooses the mode after the plugin has initialized.
+    for (bool const multiBlock : {false, true})
+    {
+        params.mMultiCtasKvMode = multiBlock;
+        params.mTileScheduler = multiBlock ? TileScheduler::Static : TileScheduler::Persistent;
+        mTllmGenFMHARunner->warmup(params);
+    }
+}
+
 int XqaDispatcher::getWorkspaceAlignment()
 {
     constexpr size_t kXQA_OUT_ELEM_SIZE = 2; // fp16 or bf16.

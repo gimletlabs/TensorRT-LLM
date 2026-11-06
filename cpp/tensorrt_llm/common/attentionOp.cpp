@@ -3430,6 +3430,14 @@ int AttentionOp::initialize() noexcept
     return 0;
 }
 
+void AttentionOp::warmupGenerationJIT(int maxNumRequests, int maxSeqLenKv)
+{
+    if (mEnableXQA && useKVCache() && !isCrossAttention() && mXqaDispatcher != nullptr)
+    {
+        mXqaDispatcher->warmup(maxNumRequests, maxSeqLenKv);
+    }
+}
+
 void AttentionOp::reserveSemaphoreArray(int32_t size)
 {
     if (size == 0 || (size <= mNbMultiBlockSemaphores && mMultiBlockSemaphores != nullptr))

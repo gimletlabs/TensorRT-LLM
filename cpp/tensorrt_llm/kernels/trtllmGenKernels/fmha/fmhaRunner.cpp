@@ -65,6 +65,12 @@ TllmGenFmhaRunner::TllmGenFmhaRunner(Data_type dtypeQ, Data_type dtypeK, Data_ty
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+void TllmGenFmhaRunner::warmup(TllmGenFmhaRunnerParams const& runnerParams)
+{
+    TLLM_CHECK_WITH_INFO(mKernel != nullptr, "TRTLLM-GEN: Cannot warm up a null FMHA kernel.");
+    mKernel->warmup(runnerParams);
+}
+
 void TllmGenFmhaRunner::run(TllmGenFmhaRunnerParams const& runnerParams)
 {
     if (mKernel == nullptr)
