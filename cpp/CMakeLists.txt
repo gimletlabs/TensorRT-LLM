@@ -308,7 +308,8 @@ if(NOT NVTX_DISABLE)
   FetchContent_MakeAvailable(nvtx)
 endif()
 
-if(BUILD_DEEP_GEMM)
+# Torch-free bundles also ship the pinned headers for downstream C++ consumers.
+if(BUILD_DEEP_GEMM OR BUILD_GIMLET_KERNELS_ONLY)
   FetchContent_MakeAvailable(deepgemm)
 endif()
 
