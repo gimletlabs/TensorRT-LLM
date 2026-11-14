@@ -457,6 +457,8 @@ public:
         return mMultiBlockSemaphores.get();
     }
 
+    void warmupGenerationJIT(int maxNumRequests, int maxSeqLenKv);
+
     void reserveSemaphoreArray(int32_t size);
 
     void debugCheckSemaphores(cudaStream_t stream);

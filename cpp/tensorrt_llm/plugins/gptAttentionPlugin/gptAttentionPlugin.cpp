@@ -223,6 +223,19 @@ GPTAttentionPlugin::IndexType GPTAttentionPlugin::getIdx(IdxEntry const& entry) 
 }
 
 // IPluginV2DynamicExt Methods
+int GPTAttentionPlugin::initialize() noexcept
+{
+    int const status = GPTAttentionPluginCommon::initialize();
+    if (status == 0)
+    {
+        // These bounds survive engine serialization, so cached engines also warm up before serving.
+        int constexpr kMinWarmupRequests = 256;
+        int const maxRequests = std::max(kMinWarmupRequests, mNbMultiBlockSemaphores / mNumHeads);
+        warmupGenerationJIT(maxRequests, mMaxContextLength);
+    }
+    return status;
+}
+
 GPTAttentionPlugin* GPTAttentionPlugin::clone() const noexcept
 {
     return dynamic_cast<GPTAttentionPlugin*>(this->cloneImpl<GPTAttentionPlugin>());

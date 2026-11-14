@@ -517,6 +517,11 @@ private:
     }
 
 public:
+    void warmup(RunnerParams const& params)
+    {
+        runJITWarmupGridIfRequested(params);
+    }
+
     void run(RunnerParams const& params)
     {
         if (params.mMaxSeqLenQ == 0 || params.mBatchSize == 0
